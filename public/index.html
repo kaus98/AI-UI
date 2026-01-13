@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat Interface</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <button id="new-chat-btn" class="new-chat-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12h14"></path>
+                    </svg>
+                    New Chat
+                </button>
+            </div>
+            <div class="chat-list" id="chat-list">
+                <!-- Chat items will be injected here -->
+            </div>
+        </aside>
+
+        <section class="main-content">
+            <!-- Sidebar / Header -->
+            <header class="chat-header">
+                <div class="header-left">
+                    <button class="menu-btn" id="menu-btn" aria-label="Toggle Menu">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </button>
+                    <div class="logo">
+                        <div class="logo-icon">AI</div>
+                        <div class="endpoint-selector-wrapper">
+                            <select id="endpoint-select" class="endpoint-select">
+                                <option value="" disabled>Select Endpoint</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls">
+                    <button id="settings-btn" class="icon-btn" title="Settings">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path
+                                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z">
+                            </path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                    </button>
+                    <select id="model-select" class="model-select">
+                        <option value="" disabled selected>Loading models...</option>
+                    </select>
+                    <div class="status-indicator" id="status-indicator" title="Connected"></div>
+                </div>
+            </header>
+
+            <!-- Chat Area -->
+            <main class="chat-area" id="chat-container">
+                <div class="welcome-message">
+                    <h2>Welcome</h2>
+                    <p>Select a model and start chatting.</p>
+                </div>
+            </main>
+
+            <!-- Input Area -->
+            <footer class="input-area">
+                <div class="input-container">
+                    <textarea id="user-input" placeholder="Message AI..." rows="1"></textarea>
+                    <button id="send-btn" disabled>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M7 11L12 6L17 11M12 18V7" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                </div>
+            </footer>
+        </section>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>Endpoints</h3>
+                <div id="endpoints-list" class="endpoints-list">
+                    <!-- Endpoints injected here -->
+                </div>
+
+                <button id="add-endpoint-btn" class="secondary-btn">+ Add Endpoint</button>
+
+                <!-- Edit Form (Hidden by default) -->
+                <div id="endpoint-form" class="endpoint-form hidden">
+                    <h4>Edit Endpoint</h4>
+                    <input type="hidden" id="edit-id">
+                    <div class="form-group">
+                        <label>Preset</label>
+                        <select id="edit-preset"
+                            style="width: 100%; padding: 0.75rem; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            <option value="custom">Custom</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="google">Google Gemini</option>
+                            <option value="groq">Groq</option>
+                            <option value="nvidia">NVIDIA</option>
+                            <option value="lm-studio">LM Studio (localhost:1234)</option>
+                            <option value="ollama">Ollama (localhost:11434)</option>
+                            <option value="localai">LocalAI (localhost:8080)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="edit-name" placeholder="e.g. OpenAI">
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL</label>
+                        <input type="text" id="edit-url" placeholder="https://api.openai.com/v1">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Auth Type</label>
+                        <select id="edit-auth-type"
+                            style="width: 100%; padding: 0.75rem; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            <option value="api-key">API Key</option>
+                            <option value="oauth2">OAuth 2.0 (Client Credentials)</option>
+                        </select>
+                    </div>
+
+                    <!-- API Key Input -->
+                    <div id="auth-api-key" class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="edit-key" placeholder="sk-...">
+                    </div>
+
+                    <!-- OAuth inputs -->
+                    <div id="auth-oauth" class="hidden">
+                        <div class="form-group">
+                            <label>Token URL</label>
+                            <input type="text" id="edit-token-url" placeholder="https://oauth.example.com/token">
+                        </div>
+                        <div class="form-group">
+                            <label>Client ID</label>
+                            <input type="text" id="edit-client-id" placeholder="Client ID">
+                        </div>
+                        <div class="form-group">
+                            <label>Client Secret</label>
+                            <input type="password" id="edit-client-secret" placeholder="Client Secret">
+                        </div>
+                        <div class="form-group">
+                            <label>Scope (Optional)</label>
+                            <input type="text" id="edit-scope" placeholder="api://default">
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button id="cancel-edit-btn" class="ghost-btn">Cancel</button>
+                        <button id="save-endpoint-btn" class="primary-btn">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+
+</html>
