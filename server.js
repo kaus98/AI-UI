@@ -24,9 +24,17 @@ async function getConfig() {
         const config = JSON.parse(data);
         // Ensure structure
         if (!config.endpoints) config.endpoints = [];
+
+        // Ensure Unified API Key exists
+        if (!config.unifiedApiKey) {
+            config.unifiedApiKey = 'ag-' + Date.now().toString(36) + Math.random().toString(36).substr(2);
+            await saveConfig(config); // Save immediately
+            console.log('Generated Unified API Key:', config.unifiedApiKey);
+        }
+
         return config;
     } catch (e) {
-        return { endpoints: [], currentEndpointId: null };
+        return { endpoints: [], currentEndpointId: null, unifiedApiKey: null };
     }
 }
 
@@ -315,8 +323,22 @@ app.post('/api/chat', async (req, res) => {
 
 // --- Unified OpenAI-Compatible API ---
 
+// Middleware for Unified API Token Check
+async function checkUnifiedAuth(req, res, next) {
+    const config = await getConfig();
+    const authHeader = req.headers.authorization;
+
+    // Allow if no key is configured (dev mode) or matches
+    if (!config.unifiedApiKey) return next();
+
+    if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.split(' ')[1] !== config.unifiedApiKey) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid Unified API Key' });
+    }
+    next();
+}
+
 // 1. Unified Models Endpoint
-app.get('/unified/v1/models', async (req, res) => {
+app.get('/unified/v1/models', checkUnifiedAuth, async (req, res) => {
     try {
         const config = await getConfig();
         const allModels = [];
@@ -328,9 +350,10 @@ app.get('/unified/v1/models', async (req, res) => {
                 const authToken = await getOrRefreshAccessToken(endpoint, config);
                 const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
 
-                const response = await fetch(`${baseUrl}/models`, {
-                    headers: { 'Authorization': `Bearer ${authToken}` }
-                });
+                const headers = {};
+                if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+                const response = await fetch(`${baseUrl}/models`, { headers });
 
                 if (response.ok) {
                     const data = await response.json();
@@ -363,7 +386,7 @@ app.get('/unified/v1/models', async (req, res) => {
 });
 
 // 2. Unified Chat Completion Endpoint
-app.post('/unified/v1/chat/completions', async (req, res) => {
+app.post('/unified/v1/chat/completions', checkUnifiedAuth, async (req, res) => {
     try {
         const config = await getConfig();
         let { model, ...rest } = req.body;
