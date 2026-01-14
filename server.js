@@ -313,7 +313,119 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// Start Server
+// --- Unified OpenAI-Compatible API ---
+
+// 1. Unified Models Endpoint
+app.get('/unified/v1/models', async (req, res) => {
+    try {
+        const config = await getConfig();
+        const allModels = [];
+
+        // Fetch from all endpoints in parallel
+        await Promise.all(config.endpoints.map(async (endpoint) => {
+            try {
+                // Get Token
+                const authToken = await getOrRefreshAccessToken(endpoint, config);
+                const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+
+                const response = await fetch(`${baseUrl}/models`, {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.data && Array.isArray(data.data)) {
+                        data.data.forEach(m => {
+                            // Normalize ID
+                            let realId = m.id || m.model;
+                            if (realId) {
+                                // Prefix with Endpoint Name
+                                allModels.push({
+                                    id: `${endpoint.name}/${realId}`, // Format: "EndpointName/modelId"
+                                    object: 'model',
+                                    created: m.created || Date.now(),
+                                    owned_by: endpoint.name
+                                });
+                            }
+                        });
+                    }
+                }
+            } catch (err) {
+                console.error(`Failed to fetch models from ${endpoint.name}:`, err.message);
+                // Continue even if one fails
+            }
+        }));
+
+        res.json({ object: 'list', data: allModels });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 2. Unified Chat Completion Endpoint
+app.post('/unified/v1/chat/completions', async (req, res) => {
+    try {
+        const config = await getConfig();
+        let { model, ...rest } = req.body;
+
+        if (!model) return res.status(400).json({ error: 'Model is required' });
+
+        // Parse Endpoint and Real Model ID
+        // Expected format: "EndpointName/RealModelID"
+        const parts = model.split('/');
+        if (parts.length < 2) {
+            return res.status(400).json({ error: 'Invalid model format. Expected "EndpointName/ModelID"' });
+        }
+
+        const endpointName = parts[0];
+        const realModelId = parts.slice(1).join('/'); // Rejoin rest in case model ID has slashes
+
+        // Find Endpoint
+        const endpoint = config.endpoints.find(e =>
+            e.name.toLowerCase() === endpointName.toLowerCase()
+        );
+
+        if (!endpoint) {
+            return res.status(404).json({ error: `Endpoint '${endpointName}' not found` });
+        }
+
+        // Prepare Request
+        const authToken = await getOrRefreshAccessToken(endpoint, config);
+        const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+        const payload = { model: realModelId, ...rest };
+
+        // Forward
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            // Forward upstream error
+            const errData = await response.json().catch(() => ({}));
+            return res.status(response.status).json(errData);
+        }
+
+        // Stream response? For now assumption is non-stream or handle standard JSON
+        // Note: If streaming is needed, we'd need to pipe res body. 
+        // For simplicity, buffer full response unless user asked for stream logic (Task didn't specify stream).
+        // Standard JSON proxy:
+        const data = await response.json();
+
+        // Optionally rewrite model in response to match request
+        if (data.model) data.model = model;
+
+        res.json(data);
+
+    } catch (error) {
+        console.error('Unified API Error:', error);
+        res.status(500).json({ error: 'Internal Gateway Error' });
+    }
+});
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });
