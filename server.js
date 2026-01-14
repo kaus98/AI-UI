@@ -2,6 +2,9 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs').promises;
 
+// Disable SSL Verification (Self-signed cert support)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 // We'll read config dynamically now
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const DATA_FILE = path.join(__dirname, 'data', 'chats.json');
@@ -239,7 +242,13 @@ app.get('/api/models', async (req, res) => {
 
         // Filter for chat models only
         if (data.data && Array.isArray(data.data)) {
+            // Normalize: Ensure 'id' exists (some APIs use 'model')
+            data.data.forEach(m => {
+                if (!m.id && m.model) m.id = m.model;
+            });
+
             data.data = data.data.filter(model => {
+                if (!model.id) return false; // Skip if no ID found
                 const id = model.id.toLowerCase();
                 return !id.includes('embed') &&
                     !id.includes('audio') &&
