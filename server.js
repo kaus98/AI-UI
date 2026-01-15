@@ -1,26 +1,73 @@
 const express = require('express');
+const cors = require('cors'); // Ensure cors is required if used, otherwise remove
 const path = require('path');
-const fs = require('fs').promises;
+const fsPromises = require('fs').promises;
+const fs = require('fs'); // Need sync/stream for logging
 
 // Disable SSL Verification (Self-signed cert support)
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+// process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-// We'll read config dynamically now
+// Config
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const DATA_FILE = path.join(__dirname, 'data', 'chats.json');
+const DATA_DIR = path.join(__dirname, 'data');
+const CHATS_FILE = path.join(DATA_DIR, 'chats.json');
+const LOGS_DIR = path.join(__dirname, 'logs');
+
+// Ensure directories exist
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
+
+// Logging Helper
+function logToFile(type, message, details = null) {
+    const timestamp = new Date().toISOString();
+    const logFile = path.join(LOGS_DIR, type === 'client' ? 'client_logs.txt' : 'server_logs.txt');
+
+    let logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
+    if (details) {
+        if (typeof details === 'object') {
+            try {
+                logEntry += `\nDetails: ${JSON.stringify(details, null, 2)}`;
+            } catch (e) {
+                logEntry += `\nDetails: [Circular/Unserializable]`;
+            }
+        } else {
+            logEntry += `\nDetails: ${details}`;
+        }
+    }
+    logEntry += '\n' + '-'.repeat(80) + '\n';
+
+    fs.appendFile(logFile, logEntry, (err) => {
+        if (err) console.error('Failed to write log:', err);
+    });
+}
 
 const app = express();
 const PORT = 3000;
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Global Request Logger Middleware
+app.use((req, res, next) => {
+    // Skip logging for log endpoint to prevent loop
+    if (req.url === '/api/logs') return next();
+
+    logToFile('server', `Incoming Request: ${req.method} ${req.url}`, {
+        body: req.body,
+        query: req.query,
+        headers: {
+            'user-agent': req.headers['user-agent']
+        }
+    });
+    next();
+});
 
 // --- Config Configuration ---
 
 async function getConfig() {
     try {
-        const data = await fs.readFile(CONFIG_FILE, 'utf8');
+        const data = await fsPromises.readFile(CONFIG_FILE, 'utf8');
         const config = JSON.parse(data);
         // Ensure structure
         if (!config.endpoints) config.endpoints = [];
@@ -39,7 +86,21 @@ async function getConfig() {
 }
 
 async function saveConfig(config) {
-    await fs.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+    await fsPromises.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
+// --- History Configuration ---
+async function getHistory() {
+    try {
+        const data = await fsPromises.readFile(CHATS_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (e) {
+        return [];
+    }
+}
+
+async function saveHistory(chats) {
+    await fsPromises.writeFile(CHATS_FILE, JSON.stringify(chats, null, 2));
 }
 
 function getEndpoint(config, id) {
@@ -49,6 +110,13 @@ function getEndpoint(config, id) {
 }
 
 // --- Config API ---
+
+// Log ingestion from client
+app.post('/api/logs', (req, res) => {
+    const { level, message, details } = req.body;
+    logToFile('client', `[${level || 'INFO'}] ${message}`, details);
+    res.json({ success: true });
+});
 
 app.get('/api/endpoints', async (req, res) => {
     const config = await getConfig();
@@ -145,19 +213,20 @@ app.post('/api/endpoints/select', async (req, res) => {
 
 app.get('/api/history', async (req, res) => {
     try {
-        const data = await fs.readFile(DATA_FILE, 'utf8');
-        res.json(JSON.parse(data));
+        const chats = await getHistory();
+        res.json(chats);
     } catch (error) {
-        if (error.code === 'ENOENT') return res.json([]);
+        logToFile('server', 'History Read Error', error.message);
         res.status(500).json({ error: 'Failed to read history' });
     }
 });
 
 app.post('/api/history', async (req, res) => {
     try {
-        await fs.writeFile(DATA_FILE, JSON.stringify(req.body, null, 2));
+        await saveHistory(req.body);
         res.json({ success: true });
     } catch (error) {
+        logToFile('server', 'History Save Error', error.message);
         res.status(500).json({ error: 'Failed to save history' });
     }
 });
@@ -232,9 +301,11 @@ app.get('/api/models', async (req, res) => {
         const authToken = await getOrRefreshAccessToken(endpoint, config);
 
         const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
-        console.log(`Fetching models from: ${baseUrl}/models`);
+        const targetUrl = `${baseUrl}/models`;
+        console.log(`Fetching models from: ${targetUrl}`);
+        logToFile('server', `Fetching models from ${endpoint.name}`, { url: targetUrl });
 
-        const response = await fetch(`${baseUrl}/models`, {
+        const response = await fetch(targetUrl, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${authToken}`,
@@ -243,7 +314,8 @@ app.get('/api/models', async (req, res) => {
         });
 
         if (!response.ok) {
-            throw new Error(`Upstream Error: ${response.status}`);
+            const errText = await response.text();
+            throw new Error(`Upstream Error: ${response.status} ${errText}`);
         }
 
         const data = await response.json();
@@ -271,10 +343,18 @@ app.get('/api/models', async (req, res) => {
         res.json(data);
     } catch (error) {
         console.error('Error fetching models:', error.message);
-        if (error.cause && error.cause.code === 'ECONNREFUSED') {
-            return res.status(502).json({ error: `Could not connect to ${error.cause.address}:${error.cause.port}. Is the local server running?` });
+        logToFile('server', 'Model Fetch Failed', {
+            endpointId: req.query.endpointId,
+            error: error.message,
+            cause: error.cause
+        });
+
+        if (error.cause && (error.cause.code === 'ECONNREFUSED' || error.cause.code === 'ENOTFOUND')) {
+            return res.status(502).json({
+                error: `Connection Failed: Could not reach ${error.cause.address || 'host'}:${error.cause.port || ''}. Check if the service is running at ${endpoint ? endpoint.baseUrl : 'url'}`
+            });
         }
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: `Model fetch failed: ${error.message}` });
     }
 });
 
@@ -294,7 +374,15 @@ app.post('/api/chat', async (req, res) => {
         const authToken = await getOrRefreshAccessToken(endpoint, config);
 
         // Prepare body (remove custom fields)
-        const { endpointId: _, ...chatBody } = req.body;
+        const { endpointId: _, messages, ...restBody } = req.body;
+
+        // Sanitize messages: remove 'html' and other internal fields
+        const sanitizedMessages = messages.map(msg => {
+            const { html, ...restMsg } = msg;
+            return restMsg;
+        });
+
+        const chatBody = { ...restBody, messages: sanitizedMessages };
 
         const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
         console.log(`Sending chat to: ${baseUrl}/chat/completions`);
@@ -309,7 +397,13 @@ app.post('/api/chat', async (req, res) => {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
+            const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
+            console.error('Upstream API Error:', response.status, errorData);
+            logToFile('server', 'Upstream Chat Error', {
+                status: response.status,
+                url: `${baseUrl}/chat/completions`,
+                error: errorData
+            });
             return res.status(response.status).json(errorData);
         }
 
@@ -339,6 +433,8 @@ async function checkUnifiedAuth(req, res, next) {
 
 // 1. Unified Models Endpoint
 app.get('/unified/v1/models', checkUnifiedAuth, async (req, res) => {
+    console.log('[Unified API] Fetching models...');
+    logToFile('server', 'Unified API: Fetching Models');
     try {
         const config = await getConfig();
         const allModels = [];
@@ -357,6 +453,7 @@ app.get('/unified/v1/models', checkUnifiedAuth, async (req, res) => {
 
                 if (response.ok) {
                     const data = await response.json();
+                    let count = 0;
                     if (data.data && Array.isArray(data.data)) {
                         data.data.forEach(m => {
                             // Normalize ID
@@ -369,12 +466,19 @@ app.get('/unified/v1/models', checkUnifiedAuth, async (req, res) => {
                                     created: m.created || Date.now(),
                                     owned_by: endpoint.name
                                 });
+                                count++;
                             }
                         });
                     }
+                    console.log(`[Unified API] Fetched ${count} models from ${endpoint.name}`);
+                    logToFile('server', `Unified API: Fetched ${count} models from ${endpoint.name}`);
+                } else {
+                    console.error(`[Unified API] Failed to fetch from ${endpoint.name}: Status ${response.status}`);
+                    logToFile('server', `Unified API: Failed to fetch from ${endpoint.name}`, { status: response.status });
                 }
             } catch (err) {
-                console.error(`Failed to fetch models from ${endpoint.name}:`, err.message);
+                console.error(`[Unified API] Error fetching from ${endpoint.name}:`, err.message);
+                logToFile('server', `Unified API: Error fetching from ${endpoint.name}`, err.message);
                 // Continue even if one fails
             }
         }));
@@ -418,6 +522,13 @@ app.post('/unified/v1/chat/completions', checkUnifiedAuth, async (req, res) => {
         const payload = { model: realModelId, ...rest };
 
         // Forward
+        console.log(`[Unified API] Forwarding to ${endpoint.name} (${baseUrl})...`);
+        logToFile('server', `Unified API: Forwarding Request`, {
+            target: endpoint.name,
+            url: `${baseUrl}/chat/completions`,
+            payload: payload
+        });
+
         const response = await fetch(`${baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
@@ -430,12 +541,36 @@ app.post('/unified/v1/chat/completions', checkUnifiedAuth, async (req, res) => {
         if (!response.ok) {
             // Forward upstream error
             const errData = await response.json().catch(() => ({}));
+            console.error(`[Unified API] Upstream Error from ${endpoint.name}:`, response.status, errData);
             return res.status(response.status).json(errData);
         }
 
-        // Stream response? For now assumption is non-stream or handle standard JSON
-        // Note: If streaming is needed, we'd need to pipe res body. 
-        // For simplicity, buffer full response unless user asked for stream logic (Task didn't specify stream).
+        // Handle Streaming
+        if (payload.stream) {
+            console.log(`[Unified API] Streaming response from ${endpoint.name}...`);
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+
+            // Pipe response body directly to client
+            if (response.body) {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                // Read stream
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value, { stream: true });
+                    res.write(chunk);
+                }
+                res.end();
+            } else {
+                res.end();
+            }
+            return;
+        }
+
         // Standard JSON proxy:
         const data = await response.json();
 
@@ -449,6 +584,6 @@ app.post('/unified/v1/chat/completions', checkUnifiedAuth, async (req, res) => {
         res.status(500).json({ error: 'Internal Gateway Error' });
     }
 });
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });

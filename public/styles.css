@@ -283,7 +283,8 @@ body {
 .message {
     display: flex;
     gap: 1rem;
-    max-width: 800px;
+    max-width: 95%;
+    /* Increased from 800px */
     margin: 0 auto;
     width: 100%;
     animation: slideUp 0.3s ease-out;
@@ -302,6 +303,49 @@ body {
     border: 1px solid var(--border-color);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    overflow-x: hidden;
+}
+
+/* Markdown Styles */
+.markdown-body {
+    font-family: inherit;
+    line-height: 1.6;
+}
+
+.markdown-body pre {
+    background: #1e1e1e;
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 0.75rem 0;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    border: 1px solid var(--border-color);
+}
+
+.markdown-body code {
+    background: rgba(175, 184, 193, 0.2);
+    padding: 0.2em 0.4em;
+    border-radius: 6px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.markdown-body pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    color: #e6edf3;
+}
+
+.markdown-body p {
+    margin-bottom: 0;
+}
+
+.markdown-body p:last-child {
+    margin-bottom: 0;
 }
 
 .message.user .message-content {
@@ -327,7 +371,8 @@ body {
 
 .input-container {
     width: 100%;
-    max-width: 800px;
+    max-width: 95%;
+    /* Increased from 800px */
     position: relative;
     background: var(--card-bg);
     border-radius: 12px;
@@ -344,17 +389,117 @@ body {
     border-color: var(--primary-color);
 }
 
-textarea {
-    flex: 1;
-    background: transparent;
+/* EasyMDE / CodeMirror Overrides */
+.EasyMDEContainer,
+.CodeMirror {
+    background: transparent !important;
+    border: none !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.95rem !important;
+    color: var(--text-primary) !important;
+    line-height: 1.6 !important;
+}
+
+.CodeMirror-scroll {
+    min-height: 45px !important;
+    max-height: 200px !important;
+}
+
+.CodeMirror-cursor {
+    border-color: var(--text-primary) !important;
+}
+
+.CodeMirror-selected {
+    background: rgba(99, 102, 241, 0.3) !important;
+}
+
+.CodeMirror-line {
+    padding: 0 4px !important;
+}
+
+/* Remove default EasyMDE toolbar/statusbar borders if they appeared */
+.editor-statusbar {
+    display: none !important;
+}
+
+/* Toolbar Styling for Dark Mode */
+.editor-toolbar {
+    background-color: var(--card-bg) !important;
+    border: none !important;
+    border-bottom: 1px solid var(--border-color) !important;
+    border-radius: 12px 12px 0 0 !important;
+    padding: 0 4px !important;
+}
+
+.editor-toolbar i.separator {
+    border-left: 1px solid var(--border-color) !important;
+    border-right: none !important;
+}
+
+.editor-toolbar button {
+    color: var(--text-secondary) !important;
+    background: transparent !important;
+    border: none !important;
+    transition: all 0.2s;
+}
+
+.editor-toolbar button:hover,
+.editor-toolbar button.active {
+    background: var(--border-color) !important;
+    color: var(--text-primary) !important;
+    border: none !important;
+}
+
+/* Input Area Adjustments */
+.input-container {
+    width: 100%;
+    max-width: 95%;
+    position: relative;
+    background: var(--card-bg);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    padding: 0;
+    /* Remove padding to let toolbar sit flush */
+    display: flex;
+    flex-direction: column;
+    /* Stack toolbar and editor */
+    align-items: stretch;
+    /* Stretch to fill width */
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    transition: box-shadow 0.2s ease;
+}
+
+/* Move send button to absolute position or adjust layout since we are now column */
+#send-btn {
+    background: var(--primary-color);
     border: none;
-    color: var(--text-primary);
-    padding: 0.75rem 1rem;
-    font-family: inherit;
-    font-size: 0.95rem;
-    resize: none;
-    outline: none;
-    max-height: 200px;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    z-index: 5;
+
+    /* Position Absolute at bottom right */
+    position: absolute;
+    bottom: 0.5rem;
+    right: 0.5rem;
+}
+
+/* Add padding to editor to avoid text going under button */
+.CodeMirror {
+    padding-bottom: 0.5rem;
+    padding-right: 3rem;
+    /* Space for send button */
+}
+
+/* Hide original textarea as EasyMDE replaces it, but keep it for validation if needed (EasyMDE hides it automatically) */
+textarea {
+    display: none;
 }
 
 #send-btn {
@@ -370,17 +515,8 @@ textarea {
     justify-content: center;
     margin: 0.25rem;
     transition: all 0.2s ease;
-}
-
-#send-btn:hover:not(:disabled) {
-    background: var(--primary-hover);
-    transform: translateY(-1px);
-}
-
-#send-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    background: var(--border-color);
+    z-index: 5;
+    /* Ensure above editor */
 }
 
 /* Animations */
@@ -596,6 +732,37 @@ textarea {
     cursor: pointer;
     padding: 0.5rem;
     border-radius: 6px;
+}
+
+/* Error Toast */
+.error-toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(220, 38, 38, 0.9);
+    /* Red */
+    backdrop-filter: blur(10px);
+    color: white;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 2000;
+    transform: translateX(120%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    max-width: 350px;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.error-toast.show {
+    transform: translateX(0);
+}
+
+.error-toast svg {
+    flex-shrink: 0;
 }
 
 .icon-btn:hover {

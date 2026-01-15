@@ -150,11 +150,26 @@ let state = {
     currentEndpointId: null
 };
 
+// --- Logging Helper ---
+async function logToServer(level, message, details = null) {
+    try {
+        // Don't await strictly to avoid blocking UI
+        fetch('/api/logs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ level, message, details })
+        }).catch(e => console.error('Log upload failed', e));
+    } catch (e) {
+        console.error('Log helper failed', e);
+    }
+}
+
 // --- API Client ---
 
 async function fetchEndpoints() {
     try {
         const res = await fetch('/api/endpoints');
+        if (!res.ok) throw new Error('Failed to load settings');
         const data = await res.json();
         state.endpoints = data.endpoints;
         state.currentEndpointId = data.currentEndpointId;
@@ -162,6 +177,8 @@ async function fetchEndpoints() {
         renderEndpointsList();
     } catch (e) {
         console.error('Failed to fetch endpoints', e);
+        showError('Failed to load endpoints: ' + e.message);
+        logToServer('ERROR', 'Failed to fetch endpoints', e.message);
     }
 }
 
@@ -172,7 +189,14 @@ async function fetchModels() {
             : '/api/models';
 
         const response = await fetch(url);
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `Error ${response.status}`);
+        }
+
         const data = await response.json();
+        logToServer('INFO', 'Fetched Models', { count: data.data ? data.data.length : 0 });
 
         modelSelect.innerHTML = '';
         if (data.data && Array.isArray(data.data)) {
@@ -191,6 +215,8 @@ async function fetchModels() {
         console.error(e);
         statusIndicator.style.backgroundColor = '#d73a49';
         statusIndicator.title = 'Connection Failed';
+        showError('Failed to fetch models: ' + e.message);
+        logToServer('ERROR', 'Failed to fetch models', e.message);
     }
 }
 
@@ -205,6 +231,7 @@ async function saveChatState() {
         });
     } catch (e) {
         console.error('Failed to save state:', e);
+        showError('Warning: Failed to save chat history');
     }
 }
 
@@ -260,24 +287,19 @@ function setCurrentChat(id) {
         if (chat.endpointId) {
             if (chat.endpointId !== state.currentEndpointId) {
                 // Mismatch: Disable Input, Enable Selector (to switch back)
-                userInput.disabled = true;
-                userInput.placeholder = `Switch to endpoint to resume chat`;
+                if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', true);
                 sendBtn.disabled = true;
                 endpointSelect.disabled = false;
             } else {
                 // Match: Enable Input, Disable Selector (Lock context)
-                userInput.disabled = false;
-                userInput.placeholder = "Message AI...";
-                userInput.style.height = 'auto'; // Reset height
-                sendBtn.disabled = userInput.value.trim() === ''; // Reset state
+                if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', false);
+                sendBtn.disabled = false; // Let logic decide
                 endpointSelect.disabled = true;
             }
         } else {
             // New/UnBound Chat: Enable everything
-            userInput.disabled = false;
-            userInput.placeholder = "Message AI...";
-            userInput.style.height = 'auto';
-            sendBtn.disabled = userInput.value.trim() === '';
+            if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', false);
+            sendBtn.disabled = false;
             endpointSelect.disabled = false;
         }
     }
@@ -345,43 +367,54 @@ function renderMessages() {
         }
         return;
     }
-    chat.messages.forEach(msg => appendMessageDiv(msg.role === 'user' ? 'User' : 'AI', msg.content, msg.role === 'user' ? 'user' : 'ai'));
+    chat.messages.forEach(msg => appendMessageDiv(msg.role === 'user' ? 'User' : 'AI', msg.content, msg.role === 'user' ? 'user' : 'ai', msg.html));
     scrollToBottom();
 }
 
 
 
 // --- Markdown Configuration ---
-marked.setOptions({
-    highlight: function (code, lang) {
-        if (lang && hljs.getLanguage(lang)) {
-            return hljs.highlight(code, { language: lang }).value;
-        }
-        return hljs.highlightAuto(code).value;
-    },
-    breaks: true
-});
+// Configure Marked
+// 1. Sanitize HTML (prevent injection)
+// 2. Disable indented code blocks (prevent fragmentation of pasted code)
+const renderer = {
+    html(chunk) {
+        // Handle case where marked passes a token object instead of a string
+        const text = typeof chunk === 'string' ? chunk : (chunk.text || chunk.raw || '');
+        // Escape raw HTML tags so they render as text
+        return text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+};
 
-function appendMessageDiv(role, content, type) {
+const tokenizer = {
+    // Disable indented code blocks (4 spaces). 
+    // This forces users to use backticks for code blocks, preventing accidental splitting.
+    code(src) {
+        return false;
+    },
+    // Also disable lists and blockquotes if we want strictly "text unless backticks"
+    // This often causes code with dashes or > to be split into lists/quotes
+    list(src) { return false; },
+    blockquote(src) { return false; },
+    // Disable HTML parsing entirely. Treat <tags> as plain text.
+    html(src) { return false; }
+};
+
+marked.use({ renderer, tokenizer, breaks: true, gfm: true });
+
+function appendMessageDiv(role, content, type, preRendered = null) {
     const welcome = document.querySelector('.welcome-message');
     if (welcome) welcome.remove();
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${type}`;
 
-    // Parse Markdown if it's an AI message, otherwise just text (encapsulated)
-    // Actually, user messages usually just text, but we can parse them too for consistency if wanted.
-    // Let's parse all for flexibility, but ensure HTML escaping for safety if needed. 
-    // marked handles parsing.
-
-    let htmlContent = content;
-    if (type === 'ai') {
-        htmlContent = marked.parse(content);
-    } else {
-        // For user, usually keep simple or just break lines. 
-        // Let's stick to simple replacement for user to match previous behavior 
-        // OR render markdown for them too? Let's render markdown for user too, why not.
-        htmlContent = marked.parse(content);
-    }
+    // Use pre-rendered HTML if available (from history), otherwise parse now
+    const htmlContent = preRendered || marked.parse(content);
 
     msgDiv.innerHTML = `<div class="message-content markdown-body">${htmlContent}</div>`;
     chatContainer.appendChild(msgDiv);
@@ -412,9 +445,16 @@ const editPreset = document.getElementById('edit-preset');
 // (editEndpoint is already defined above)
 
 window.deleteEndpoint = async (id) => {
-    if (!confirm('Delete this endpoint?')) return;
-    await fetch(`/api/endpoints/${id}`, { method: 'DELETE' });
-    await fetchEndpoints();
+    try {
+        if (!confirm('Delete this endpoint?')) return;
+        logToServer('INFO', 'Deleting Endpoint', { id });
+        const res = await fetch(`/api/endpoints/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to delete');
+        await fetchEndpoints();
+    } catch (e) {
+        showError('Delete failed: ' + e.message);
+        logToServer('ERROR', 'Delete endpoint failed', e.message);
+    }
 };
 
 addEndpointBtn.addEventListener('click', () => {
@@ -488,27 +528,35 @@ function toggleAuthFields() {
 editAuthType.addEventListener('change', toggleAuthFields);
 
 async function saveEndpoint() {
-    const data = {
-        id: editId.value || null,
-        name: editName.value,
-        baseUrl: editUrl.value,
-        apiKey: editKey.value || null,
-        authType: editAuthType.value,
-        tokenUrl: editTokenUrl.value,
-        clientId: editClientId.value,
-        clientSecret: editClientSecret.value || null,
-        scope: editScope.value
-    };
+    try {
+        const data = {
+            id: editId.value || null,
+            name: editName.value,
+            baseUrl: editUrl.value,
+            apiKey: editKey.value || null,
+            authType: editAuthType.value,
+            tokenUrl: editTokenUrl.value,
+            clientId: editClientId.value,
+            clientSecret: editClientSecret.value || null,
+            scope: editScope.value
+        };
 
-    await fetch('/api/endpoints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    });
+        const res = await fetch('/api/endpoints', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
 
-    endpointForm.classList.add('hidden');
-    addEndpointBtn.classList.remove('hidden');
-    await fetchEndpoints();
+        if (!res.ok) throw new Error('Failed to save');
+
+        logToServer('INFO', 'Saved Endpoint', { name: data.name, url: data.baseUrl });
+        endpointForm.classList.add('hidden');
+        addEndpointBtn.classList.remove('hidden');
+        await fetchEndpoints();
+    } catch (e) {
+        showError('Save failed: ' + e.message);
+        logToServer('ERROR', 'Save endpoint failed', e.message);
+    }
 }
 
 // --- Interaction ---
@@ -535,7 +583,7 @@ async function init() {
 
 async function sendMessage() {
     if (state.isGenerating) return;
-    const text = userInput.value.trim();
+    const text = window.easyMDE.value().trim();
     if (!text) return;
     if (!modelSelect.value) { alert('Select a model'); return; }
 
@@ -557,14 +605,17 @@ async function sendMessage() {
         setCurrentChat(chat.id);
     }
 
-    appendMessageDiv('User', text, 'user');
+    // Parse immediately for storage
+    const userHtml = marked.parse(text);
+
+    appendMessageDiv('User', text, 'user', userHtml);
     chat.messages.push({ role: 'user', content: text });
     updateChatTitle(chat, text);
     await saveChatState();
     scrollToBottom();
 
-    userInput.value = '';
-    userInput.style.height = 'auto';
+    window.easyMDE.value('');
+    // userInput.style.height = 'auto'; // EasyMDE handles size
     state.isGenerating = true;
     sendBtn.disabled = true;
 
@@ -575,30 +626,63 @@ async function sendMessage() {
     scrollToBottom();
 
     try {
+        const payload = {
+            endpointId: chat.endpointId || state.currentEndpointId,
+            model: chat.modelId || modelSelect.value,
+            messages: chat.messages
+        };
+        logToServer('INFO', 'Sending Message', payload);
+
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                endpointId: chat.endpointId || state.currentEndpointId, // Use chat's bound endpoint
-                model: chat.modelId || modelSelect.value, // Use chat's bound model
-                messages: chat.messages
-            })
+            body: JSON.stringify(payload)
         });
 
         loadingDiv.remove();
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            let msg = `Error ${response.status}`;
+            if (err.error) {
+                if (typeof err.error === 'string') msg = err.error;
+                else if (typeof err.error === 'object') {
+                    if (err.error.message) msg = err.error.message;
+                    else if (err.error.detail) msg = err.error.detail;
+                    else msg = JSON.stringify(err.error);
+                }
+            } else if (err.detail) {
+                msg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
+            } else if (err.message) {
+                msg = err.message;
+            }
+            throw new Error(msg);
+        }
+
         const data = await response.json();
 
         if (data.choices && data.choices[0]) {
             const content = data.choices[0].message.content;
-            appendMessageDiv('AI', content, 'ai');
+            const aiHtml = marked.parse(content);
+
+            appendMessageDiv('AI', content, 'ai', aiHtml);
             chat.messages.push({ role: 'assistant', content: content });
             await saveChatState();
+            logToServer('INFO', 'Message Received', { len: content.length });
         } else {
-            appendMessageDiv('System', `Error: ${JSON.stringify(data)}`, 'ai');
+            console.error('Unexpected response:', data);
+            showError('Invalid response format from API');
+            appendMessageDiv('System', 'Invalid API Response', 'ai');
+            logToServer('ERROR', 'Invalid API Response', data);
         }
     } catch (error) {
         loadingDiv.remove();
-        appendMessageDiv('System', 'Network Error', 'ai');
+        console.error(error);
+        showError(error.message || 'Failed to send message');
+        logToServer('ERROR', 'Message Send Failed', error.message);
+        // Optional: dont show system message if using toast?  
+        // Or show it so it's in history. Let's keep it.
+        appendMessageDiv('System', `Error: ${error.message}`, 'ai');
     } finally {
         state.isGenerating = false;
         sendBtn.disabled = false;
@@ -607,14 +691,49 @@ async function sendMessage() {
 }
 
 // Listeners
-userInput.addEventListener('input', function () {
-    this.style.height = 'auto';
-    this.style.height = (this.scrollHeight) + 'px';
-    sendBtn.disabled = this.value.trim() === '';
-});
-userInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-});
+// userInput auto-resize and Enter logic replaced by EasyMDE keymaps
+
+// Setup EasyMDE
+function initEasyMDE() {
+    window.easyMDE = new EasyMDE({
+        element: document.getElementById('user-input'),
+        autoDownloadFontAwesome: true, // Needed for icons
+        status: false,
+        spellChecker: false,
+        toolbar: [
+            "bold", "italic", "strikethrough", "heading", "|",
+            "code", "quote", "unordered-list", "ordered-list", "|",
+            "link", "image", "table", "horizontal-rule", "|",
+            "preview", "side-by-side", "fullscreen", "|",
+            "undo", "redo"
+        ],
+        forceSync: true,
+        placeholder: "Message AI...",
+        minHeight: "45px", // Small initial height
+        maxHeight: "200px",
+        shortcuts: {
+            "togglePreview": null, // Keep preview button but maybe disable shortcut if it conflicts
+        },
+    });
+
+    // Custom Key Handler for Enter to Send
+    window.easyMDE.codemirror.setOption("extraKeys", {
+        "Enter": function (cm) {
+            sendMessage();
+        },
+        "Shift-Enter": function (cm) {
+            cm.replaceSelection("\n");
+        }
+    });
+
+    // Update Send Button state on input
+    window.easyMDE.codemirror.on("change", () => {
+        const val = window.easyMDE.value().trim();
+        sendBtn.disabled = val === '';
+    });
+}
+
+// Global listeners
 sendBtn.addEventListener('click', sendMessage);
 newChatBtn.addEventListener('click', async () => {
     const id = await createNewChat();
@@ -655,4 +774,37 @@ window.addEventListener('resize', () => {
 });
 
 // Start
+initEasyMDE();
 init();
+
+
+// --- Global Error Handling ---
+
+function showError(message) {
+    let toast = document.querySelector('.error-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.className = 'error-toast';
+        toast.innerHTML = `
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            <span id="error-msg"></span>
+        `;
+        document.body.appendChild(toast);
+    }
+
+    toast.querySelector('#error-msg').textContent = message;
+
+    // Force reflow
+    void toast.offsetWidth;
+
+    toast.classList.add('show');
+
+    // Auto hide
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 4000);
+}
