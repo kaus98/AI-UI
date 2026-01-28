@@ -45,6 +45,8 @@ const app = express();
 const PORT = 3000;
 
 // Middleware
+const favicon = require('serve-favicon');
+app.use(favicon(path.join(__dirname, 'public', 'favicon.png')));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
