@@ -1,4 +1,5 @@
 const modelSelect = document.getElementById('model-select');
+const refreshModelsBtn = document.getElementById('refresh-models-btn');
 const chatContainer = document.getElementById('chat-container');
 const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
@@ -350,19 +351,54 @@ function renderMessages() {
             <div class="welcome-message">
                 <h2>Welcome</h2>
                 <p>Select a model and start chatting.</p>
-                <div class="system-prompt-container">
+                
+                <!-- System Prompt -->
+                <div class="config-section" style="margin-top: 20px; max-width: 600px; margin-left: auto; margin-right: auto; text-align: left;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: 500;">System Prompt</label>
                     <textarea 
                         id="system-prompt-input" 
                         class="system-prompt-input" 
-                        placeholder="Optional: Enter a system instructions (e.g., 'You are a helpful coding assistant')..."
+                        placeholder="Enter the system prompt text..."
+                        style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-primary); min-height: 80px; resize: vertical;"
                     >${chat && chat.systemPromptDraft ? chat.systemPromptDraft : ''}</textarea>
+
+                    <!-- Temperature -->
+                    <div style="margin-top: 20px;">
+                        <label style="display:flex; justify-content:space-between; margin-bottom: 8px; font-weight: 500;">
+                            <span>Temperature</span>
+                            <span id="temp-display">${chat && chat.temperatureDraft !== undefined ? chat.temperatureDraft : '0.7'}</span>
+                        </label>
+                        <input 
+                            type="range" 
+                            id="temperature-input" 
+                            min="0" max="2" step="0.1" 
+                            value="${chat && chat.temperatureDraft !== undefined ? chat.temperatureDraft : '0.7'}"
+                            style="width: 100%; cursor: pointer;"
+                        >
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 5px;">
+                            Lower values (0.2) for precise answers, higher values (1.0+) for creativity.
+                        </p>
+                    </div>
                 </div>
             </div>`;
 
         if (chat) {
+            // System Prompt Listener
             const spInput = document.getElementById('system-prompt-input');
             spInput.addEventListener('input', (e) => {
                 chat.systemPromptDraft = e.target.value;
+                saveChatState();
+            });
+
+            // Temperature Listener
+            const tempInput = document.getElementById('temperature-input');
+            const tempDisplay = document.getElementById('temp-display');
+
+            tempInput.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                tempDisplay.textContent = val;
+                chat.temperatureDraft = val;
+                saveChatState();
             });
         }
         return;
@@ -601,6 +637,14 @@ async function sendMessage() {
             delete chat.systemPromptDraft; // Clear draft after using
         }
 
+        // Lock Temperature
+        if (chat.temperatureDraft !== undefined) {
+            chat.temperature = chat.temperatureDraft;
+            delete chat.temperatureDraft;
+        } else {
+            chat.temperature = 0.7; // Default
+        }
+
         // Re-run setCurrentChat to lock UI immediately
         setCurrentChat(chat.id);
     }
@@ -629,7 +673,8 @@ async function sendMessage() {
         const payload = {
             endpointId: chat.endpointId || state.currentEndpointId,
             model: chat.modelId || modelSelect.value,
-            messages: chat.messages
+            messages: chat.messages,
+            temperature: chat.temperature || 0.7
         };
         logToServer('INFO', 'Sending Message', payload);
 
@@ -745,6 +790,27 @@ menuBtn.addEventListener('click', () => sidebar.classList.toggle('open'));
 settingsBtn.addEventListener('click', () => settingsModal.style.display = 'block');
 closeBtn.addEventListener('click', () => settingsModal.style.display = 'none');
 window.onclick = (e) => { if (e.target === settingsModal) settingsModal.style.display = 'none'; };
+
+refreshModelsBtn.addEventListener('click', async () => {
+    try {
+        refreshModelsBtn.classList.add('spinning');
+        refreshModelsBtn.disabled = true;
+
+        const res = await fetch('/api/models/refresh', { method: 'POST' });
+        const data = await res.json();
+
+        if (!res.ok) throw new Error(data.error || 'Refresh failed');
+
+        logToServer('INFO', 'Refreshed Models', data.results);
+        await fetchModels(); // Reload list
+
+    } catch (e) {
+        showError('Refresh failed: ' + e.message);
+    } finally {
+        refreshModelsBtn.classList.remove('spinning');
+        refreshModelsBtn.disabled = false;
+    }
+});
 
 endpointSelect.addEventListener('change', async () => {
     const id = endpointSelect.value;

@@ -498,8 +498,10 @@ body {
 }
 
 /* Hide original textarea as EasyMDE replaces it, but keep it for validation if needed (EasyMDE hides it automatically) */
-textarea {
-    display: none;
+/* Global textarea rule removed to prevent conflict with EasyMDE */
+.system-prompt-input {
+    display: block;
+    /* Ensure system prompt is visible */
 }
 
 #send-btn {

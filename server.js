@@ -11,6 +11,7 @@ const fs = require('fs'); // Need sync/stream for logging
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const DATA_DIR = path.join(__dirname, 'data');
 const CHATS_FILE = path.join(DATA_DIR, 'chats.json');
+const MODELS_FILE = path.join(DATA_DIR, 'models.json');
 const LOGS_DIR = path.join(__dirname, 'logs');
 
 // Ensure directories exist
@@ -109,6 +110,20 @@ function getEndpoint(config, id) {
     if (!config.endpoints) return null;
     if (id) return config.endpoints.find(e => e.id === id);
     return config.endpoints.find(e => e.id === config.currentEndpointId) || config.endpoints[0];
+}
+
+// --- Models Configuration ---
+async function getCachedModels() {
+    try {
+        const data = await fsPromises.readFile(MODELS_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (e) {
+        return {}; // Map<endpointId, modelList[]>
+    }
+}
+
+async function saveCachedModels(models) {
+    await fsPromises.writeFile(MODELS_FILE, JSON.stringify(models, null, 2));
 }
 
 // --- Config API ---
@@ -295,70 +310,106 @@ async function getOrRefreshAccessToken(endpoint, config) {
 app.get('/api/models', async (req, res) => {
     try {
         const config = await getConfig();
-        const endpoint = getEndpoint(config, req.query.endpointId);
+        const endpointId = req.query.endpointId || config.currentEndpointId;
 
+        // 1. Try Cache First
+        const cachedModels = await getCachedModels();
+        if (cachedModels[endpointId] && cachedModels[endpointId].length > 0) {
+            console.log(`Serving models for ${endpointId} from cache.`);
+            return res.json({ object: 'list', data: cachedModels[endpointId] });
+        }
+
+        // 2. Fallback to live fetch if not in cache (optional, or force user to refresh)
+        // For better UX, let's trigger a single fetch here if missing
+        console.log(`Cache miss for ${endpointId}, fetching live...`);
+        const endpoint = getEndpoint(config, endpointId);
         if (!endpoint) throw new Error('No endpoint configured');
 
-        // Resolve Auth Token
-        const authToken = await getOrRefreshAccessToken(endpoint, config);
+        const models = await fetchModelsFromEndpoint(endpoint, config);
 
-        const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
-        const targetUrl = `${baseUrl}/models`;
-        console.log(`Fetching models from: ${targetUrl}`);
-        logToFile('server', `Fetching models from ${endpoint.name}`, { url: targetUrl });
+        // Save to cache
+        cachedModels[endpointId] = models;
+        await saveCachedModels(cachedModels);
 
-        const response = await fetch(targetUrl, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json',
-            },
-        });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Upstream Error: ${response.status} ${errText}`);
-        }
-
-        const data = await response.json();
-
-        // Filter for chat models only
-        if (data.data && Array.isArray(data.data)) {
-            // Normalize: Ensure 'id' exists (some APIs use 'model')
-            data.data.forEach(m => {
-                if (!m.id && m.model) m.id = m.model;
-            });
-
-            data.data = data.data.filter(model => {
-                if (!model.id) return false; // Skip if no ID found
-                const id = model.id.toLowerCase();
-                return !id.includes('embed') &&
-                    !id.includes('audio') &&
-                    !id.includes('tts') &&
-                    !id.includes('whisper') &&
-                    !id.includes('dall-e') &&
-                    !id.includes('moderation') &&
-                    !id.includes('realtime');
-            });
-        }
-
-        res.json(data);
+        res.json({ object: 'list', data: models });
     } catch (error) {
         console.error('Error fetching models:', error.message);
-        logToFile('server', 'Model Fetch Failed', {
-            endpointId: req.query.endpointId,
-            error: error.message,
-            cause: error.cause
-        });
-
-        if (error.cause && (error.cause.code === 'ECONNREFUSED' || error.cause.code === 'ENOTFOUND')) {
-            return res.status(502).json({
-                error: `Connection Failed: Could not reach ${error.cause.address || 'host'}:${error.cause.port || ''}. Check if the service is running at ${endpoint ? endpoint.baseUrl : 'url'}`
-            });
-        }
+        // Return empty list on failure rather than 500 if it's just a fetch error, 
+        // but let's keep consistent error reporting
         res.status(500).json({ error: `Model fetch failed: ${error.message}` });
     }
 });
+
+app.post('/api/models/refresh', async (req, res) => {
+    try {
+        const config = await getConfig();
+        const cachedModels = await getCachedModels();
+        const results = {};
+
+        console.log('Refreshing all models...');
+
+        // Parallel fetch for all endpoints
+        await Promise.all(config.endpoints.map(async (endpoint) => {
+            try {
+                const models = await fetchModelsFromEndpoint(endpoint, config);
+                cachedModels[endpoint.id] = models;
+                results[endpoint.name] = 'Success';
+            } catch (e) {
+                console.error(`Failed to refresh ${endpoint.name}:`, e.message);
+                results[endpoint.name] = `Failed: ${e.message}`;
+            }
+        }));
+
+        await saveCachedModels(cachedModels);
+        res.json({ success: true, results });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Helper to fetch from a single endpoint
+async function fetchModelsFromEndpoint(endpoint, config) {
+    const authToken = await getOrRefreshAccessToken(endpoint, config);
+    const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+    const targetUrl = `${baseUrl}/models`;
+
+    logToFile('server', `Fetching models from ${endpoint.name}`, { url: targetUrl });
+
+    const response = await fetch(targetUrl, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+        },
+    });
+
+    if (!response.ok) {
+        throw new Error(`Upstream Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    let models = [];
+
+    if (data.data && Array.isArray(data.data)) {
+        // Normalize
+        data.data.forEach(m => {
+            if (!m.id && m.model) m.id = m.model;
+        });
+
+        models = data.data.filter(model => {
+            if (!model.id) return false;
+            const id = model.id.toLowerCase();
+            return !id.includes('embed') &&
+                !id.includes('audio') &&
+                !id.includes('tts') &&
+                !id.includes('whisper') &&
+                !id.includes('dall-e') &&
+                !id.includes('moderation') &&
+                !id.includes('realtime');
+        });
+    }
+    return models;
+}
 
 app.post('/api/chat', async (req, res) => {
     try {
