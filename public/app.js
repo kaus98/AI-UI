@@ -9,6 +9,14 @@ const newChatBtn = document.getElementById('new-chat-btn');
 const menuBtn = document.getElementById('menu-btn');
 const sidebar = document.getElementById('sidebar');
 
+// Image Upload Elements
+const imageUploadInput = document.getElementById('image-upload');
+const attachBtn = document.getElementById('attach-btn');
+const imagePreviewContainer = document.getElementById('image-preview-container');
+
+// State for images
+let draftImages = []; // Array of base64 strings
+
 // Settings Elements
 const settingsBtn = document.getElementById('settings-btn');
 const settingsModal = document.getElementById('settings-modal');
@@ -205,12 +213,32 @@ async function fetchModels() {
                 const option = document.createElement('option');
                 option.value = model.id;
                 option.textContent = model.id;
+
+                // Store capability check
+                // Trust explicit capability first, then fallback to known IDs if missing
+                let hasVision = false;
+                if (model.capabilities) {
+                    hasVision = model.capabilities.supports_vision;
+                } else {
+                    // Fallback heuristics for models without explicit capabilities in the list
+                    const id = model.id.toLowerCase();
+                    hasVision = id.includes('gpt-4o') ||
+                        id.includes('vision') ||
+                        id.includes('claude-3-5-sonnet') ||
+                        id.includes('gemini-1.5-pro') ||
+                        id.includes('gemini-1.5-flash');
+                }
+
+                option.dataset.vision = hasVision;
                 modelSelect.appendChild(option);
             });
             if (data.data.length > 0) modelSelect.value = data.data[0].id;
 
             statusIndicator.style.backgroundColor = '#2ea043';
             statusIndicator.title = 'Connected';
+
+            // Initial check
+            updateAttachButtonState();
         }
     } catch (e) {
         console.error(e);
@@ -449,8 +477,23 @@ function appendMessageDiv(role, content, type, preRendered = null) {
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${type}`;
 
-    // Use pre-rendered HTML if available (from history), otherwise parse now
-    const htmlContent = preRendered || marked.parse(content);
+    let htmlContent = '';
+
+    if (preRendered) {
+        htmlContent = preRendered;
+    } else if (Array.isArray(content)) {
+        // Handle array content (Text + Images)
+        content.forEach(part => {
+            if (part.type === 'text') {
+                htmlContent += marked.parse(part.text);
+            } else if (part.type === 'image_url') {
+                htmlContent += `<img src="${part.image_url.url}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; display: block;">`;
+            }
+        });
+    } else {
+        // Handle legacy string content
+        htmlContent = marked.parse(content || '');
+    }
 
     msgDiv.innerHTML = `<div class="message-content markdown-body">${htmlContent}</div>`;
     chatContainer.appendChild(msgDiv);
@@ -649,24 +692,54 @@ async function sendMessage() {
         setCurrentChat(chat.id);
     }
 
-    // Parse immediately for storage
-    const userHtml = marked.parse(text);
+    // Prepare content for UI and API
+    let apiContent = text;
+    let uiContent = text;
 
-    appendMessageDiv('User', text, 'user', userHtml);
-    chat.messages.push({ role: 'user', content: text });
+    if (draftImages.length > 0) {
+        // Construct API payload with images
+        apiContent = [
+            { type: "text", text: text },
+            ...draftImages.map(img => ({
+                type: "image_url",
+                image_url: { url: img }
+            }))
+        ];
+
+        // Construct UI content (append images to bottom)
+        const imagesHtml = draftImages.map(img => `<img src="${img}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; display: block;">`).join('');
+        uiContent = `${marked.parse(text)}<div class="message-images">${imagesHtml}</div>`;
+
+        // Clear drafts
+        draftImages = [];
+        renderImagePreviews();
+    } else {
+        // Just text, keep as string or wrap in array if preferred (keeping string for broad compatibility if no images)
+        uiContent = marked.parse(text);
+    }
+
+    // appendMessageDiv handles raw HTML for user messages now if we pass specific flag or just use content
+    // We'll update appendMessageDiv to handle the 'messages' array format if reading from history, 
+    // but for immediate display we pre-render.
+
+    const msgDiv = appendMessageDiv('User', null, 'user', uiContent);
+
+    chat.messages.push({ role: 'user', content: apiContent }); // Store full structure
+
     updateChatTitle(chat, text);
     await saveChatState();
     scrollToBottom();
 
     window.easyMDE.value('');
     // userInput.style.height = 'auto'; // EasyMDE handles size
-    state.isGenerating = true;
-    sendBtn.disabled = true;
 
-    const loadingDiv = document.createElement('div');
-    loadingDiv.className = 'message ai';
-    loadingDiv.innerHTML = `<div class="message-content"><div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
-    chatContainer.appendChild(loadingDiv);
+    state.isGenerating = true;
+    statusIndicator.style.backgroundColor = '#eab308'; // Yellow (Thinking)
+
+    // Create AI Placeholder
+    const aiMsgDiv = appendMessageDiv('AI', '', 'ai');
+    const aiContentDiv = aiMsgDiv.querySelector('.message-content');
+    aiContentDiv.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
     scrollToBottom();
 
     try {
@@ -841,6 +914,93 @@ window.addEventListener('resize', () => {
 
 // Start
 initEasyMDE();
+// --- Image Upload Logic ---
+
+function updateAttachButtonState() {
+    const option = modelSelect.selectedOptions[0];
+    if (!option) return;
+
+    const hasVision = option.dataset.vision === 'true';
+    attachBtn.disabled = !hasVision;
+    attachBtn.style.opacity = hasVision ? '1' : '0.5';
+    attachBtn.style.cursor = hasVision ? 'pointer' : 'not-allowed';
+    attachBtn.title = hasVision ? 'Attach Image' : 'Selected model does not support image input';
+
+    // Hide preview if model is switched to non-vision while images are staged
+    if (!hasVision && draftImages.length > 0) {
+        if (confirm('The selected model does not support images. Clear attached images?')) {
+            draftImages = [];
+            renderImagePreviews();
+        }
+    }
+}
+
+modelSelect.addEventListener('change', updateAttachButtonState);
+
+attachBtn.addEventListener('click', () => {
+    imageUploadInput.click();
+});
+
+imageUploadInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    for (const file of files) {
+        try {
+            const base64 = await convertFileToBase64(file);
+            draftImages.push(base64);
+        } catch (err) {
+            console.error('Error converting file', err);
+            showError('Failed to load image');
+        }
+    }
+
+    // Reset input so same file can be selected again
+    imageUploadInput.value = '';
+    renderImagePreviews();
+});
+
+function convertFileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+    });
+}
+
+function renderImagePreviews() {
+    imagePreviewContainer.innerHTML = '';
+
+    if (draftImages.length === 0) {
+        imagePreviewContainer.classList.add('hidden');
+        return;
+    }
+
+    imagePreviewContainer.classList.remove('hidden');
+
+    draftImages.forEach((imgSrc, index) => {
+        const div = document.createElement('div');
+        div.className = 'image-preview-item';
+
+        const img = document.createElement('img');
+        img.src = imgSrc;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-image-btn';
+        removeBtn.innerHTML = '&times;';
+        removeBtn.onclick = () => {
+            draftImages.splice(index, 1);
+            renderImagePreviews();
+        };
+
+        div.appendChild(img);
+        div.appendChild(removeBtn);
+        imagePreviewContainer.appendChild(div);
+    });
+}
+
+// Initialize
 init();
 
 
