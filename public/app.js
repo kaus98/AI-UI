@@ -757,7 +757,7 @@ async function sendMessage() {
             body: JSON.stringify(payload)
         });
 
-        loadingDiv.remove();
+        if (aiMsgDiv) aiMsgDiv.remove();
 
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
@@ -794,7 +794,7 @@ async function sendMessage() {
             logToServer('ERROR', 'Invalid API Response', data);
         }
     } catch (error) {
-        loadingDiv.remove();
+        if (aiMsgDiv) aiMsgDiv.remove();
         console.error(error);
         showError(error.message || 'Failed to send message');
         logToServer('ERROR', 'Message Send Failed', error.message);
