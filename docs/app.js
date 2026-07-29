@@ -198,8 +198,11 @@ async function loadModels() {
     modelSelect.innerHTML = '<option value="" disabled selected>Loading models...</option>';
     statusIndicator.style.backgroundColor = '#f7630c';
     try {
-        const headers = await getAuthHeaders(ep);
-        const res = await fetch(`${ep.baseUrl}/models`, { headers });
+        const res = await fetch('/api/models', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint: ep })
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const models = (data.data || data.models || []).map(m => typeof m === 'string' ? { id: m } : m);
@@ -417,11 +420,11 @@ async function sendMessage() {
 
     try {
         const ep = currentEndpoint();
-        const headers = await getAuthHeaders(ep);
-        const res = await fetch(`${ep.baseUrl}/chat/completions`, {
+        const res = await fetch('/api/chat', {
             method: 'POST',
-            headers,
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                endpoint: ep,
                 model: chat.modelId,
                 messages: chat.messages.map(m => ({ role: m.role, content: m.content })),
                 stream: true

@@ -16,6 +16,18 @@ const PORT = process.env.PORT || 3001;
 const favicon = require('serve-favicon');
 app.use(favicon(path.join(__dirname, 'public', 'favicon.png')));
 app.use(express.json({ limit: '50mb' }));
+
+// CORS headers to allow docs (static/GH Pages or local) to call /api
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    next();
+});
+
+// Serve static content
+app.use('/docs', express.static(path.join(__dirname, 'docs')));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Global Request Logger Middleware

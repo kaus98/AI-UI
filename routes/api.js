@@ -166,6 +166,20 @@ router.get('/models', async (req, res) => {
     }
 });
 
+// POST version for client-side docs app (endpoint stored in browser localStorage)
+router.post('/models', async (req, res) => {
+    try {
+        const endpoint = req.body.endpoint;
+        if (!endpoint || !endpoint.baseUrl) throw new Error('No endpoint provided');
+
+        const models = await fetchModelsFromEndpoint(endpoint, { endpoints: [endpoint] });
+        res.json({ object: 'list', data: models });
+    } catch (error) {
+        console.error('Error fetching models:', error.message);
+        res.status(500).json({ error: `Model fetch failed: ${error.message}` });
+    }
+});
+
 router.post('/models/refresh', async (req, res) => {
     try {
         const config = await getConfig();
@@ -197,11 +211,17 @@ router.post('/chat', async (req, res) => {
     try {
         const config = await getConfig();
         // Client can pass endpointId optionally, otherwise verify active
-        const endpointId = req.body.endpointId || config.currentEndpointId;
-        const endpoint = getEndpoint(config, endpointId);
+        let endpoint = null;
+        if (req.body.endpoint && req.body.endpoint.baseUrl) {
+            // Client-provided endpoint (e.g. docs app running in browser)
+            endpoint = req.body.endpoint;
+        } else {
+            const endpointId = req.body.endpointId || config.currentEndpointId;
+            endpoint = getEndpoint(config, endpointId);
+        }
 
         let endpointName = 'Endpoint';
-        if (endpoint) endpointName = endpoint.name;
+        if (endpoint) endpointName = endpoint.name || 'Endpoint';
 
         if (!endpoint) throw new Error('No endpoint configured');
 
@@ -209,7 +229,7 @@ router.post('/chat', async (req, res) => {
         const authToken = await getOrRefreshAccessToken(endpoint, config);
 
         // Prepare body (remove custom fields)
-        const { endpointId: _, messages, ...restBody } = req.body;
+        const { endpointId: _, endpoint: __, messages, ...restBody } = req.body;
 
         // Sanitize messages: remove 'html' and other internal fields
         const sanitizedMessages = messages.map(msg => {
@@ -240,6 +260,21 @@ router.post('/chat', async (req, res) => {
                 error: errorData
             });
             return res.status(response.status).json(errorData);
+        }
+
+        // Handle streaming
+        if (chatBody.stream && response.body) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                res.write(decoder.decode(value, { stream: true }));
+            }
+            return res.end();
         }
 
         const data = await response.json();
