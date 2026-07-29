@@ -198,11 +198,8 @@ async function loadModels() {
     modelSelect.innerHTML = '<option value="" disabled selected>Loading models...</option>';
     statusIndicator.style.backgroundColor = '#f7630c';
     try {
-        const res = await fetch('api/models', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ endpoint: ep })
-        });
+        const headers = await getAuthHeaders(ep);
+        const res = await fetch(`${ep.baseUrl}/models`, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const models = (data.data || data.models || []).map(m => typeof m === 'string' ? { id: m } : m);
@@ -224,7 +221,11 @@ async function loadModels() {
         console.error(e);
         statusIndicator.style.backgroundColor = '#c50f1f';
         statusIndicator.title = 'Connection Failed';
-        showError('Failed to fetch models: ' + e.message);
+        if (e instanceof TypeError && e.message.includes('fetch')) {
+            showError('CORS blocked by this provider. Use a CORS-friendly endpoint (e.g. Google Gemini).');
+        } else {
+            showError('Failed to fetch models: ' + e.message);
+        }
     }
 }
 
@@ -420,11 +421,11 @@ async function sendMessage() {
 
     try {
         const ep = currentEndpoint();
-        const res = await fetch('api/chat', {
+        const headers = await getAuthHeaders(ep);
+        const res = await fetch(`${ep.baseUrl}/chat/completions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({
-                endpoint: ep,
                 model: chat.modelId,
                 messages: chat.messages.map(m => ({ role: m.role, content: m.content })),
                 stream: true
