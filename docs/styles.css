@@ -745,26 +745,42 @@ h1, h2, h3, h4, h5, h6 {
 #attach-btn:hover { background: #f0f0f0; color: var(--text-primary); }
 
 /* EasyMDE / CodeMirror */
-.EasyMDEContainer, .CodeMirror {
+.EasyMDEContainer {
+    flex: 1;
+    min-width: 0;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+.EasyMDEContainer .CodeMirror {
     background: transparent !important;
     border: none !important;
     font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif !important;
     font-size: 0.875rem !important;
     color: var(--text-primary) !important;
     line-height: 1.5 !important;
-}
-.EasyMDEContainer .CodeMirror {
     height: auto !important;
     min-height: 0 !important;
     max-height: 120px !important;
+    padding: 0 !important;
 }
-.CodeMirror-scroll { min-height: 20px !important; max-height: 120px !important; overflow-y: auto !important; }
+.CodeMirror-scroll {
+    min-height: 24px !important;
+    max-height: 120px !important;
+    overflow-y: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+.CodeMirror-sizer { min-height: 0 !important; padding: 0 !important; border-right: 0 !important; }
+.CodeMirror-lines { padding: 4px 0 !important; }
+.CodeMirror pre.CodeMirror-line,
+.CodeMirror pre.CodeMirror-line-like { padding: 0 4px !important; }
 .CodeMirror-cursor { border-color: var(--text-primary) !important; }
 .CodeMirror-selected { background: hsl(222.2 47.4% 11.2% / 0.2) !important; }
-.editor-toolbar { border-bottom: 1px solid var(--border-color) !important; background: transparent !important; }
-.editor-toolbar button { color: var(--text-secondary) !important; border: none !important; }
-.editor-toolbar button:hover { background: hsl(var(--accent)) !important; color: var(--text-primary) !important; }
+.editor-toolbar { display: none !important; }
 .editor-statusbar { display: none !important; }
+.CodeMirror-placeholder { color: var(--text-secondary) !important; padding: 0 4px !important; }
 
 /* Modal */
 .modal {

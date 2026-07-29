@@ -689,19 +689,32 @@ function initApp() {
         status: false,
         autofocus: false,
         spellChecker: false,
-        minHeight: '0px',
+        placeholder: 'Type a message...',
+        minHeight: '24px',
         maxHeight: '120px',
         initialValue: ''
     });
     // Force compact editor dimensions
-    easyMDE.codemirror.setSize('100%', 'auto');
-    const cmEl = easyMDE.codemirror.getWrapperElement();
-    if (cmEl) {
-        cmEl.style.height = 'auto';
-        cmEl.style.minHeight = '0px';
-        cmEl.style.maxHeight = '120px';
+    const cm = easyMDE.codemirror;
+    cm.setSize('100%', 'auto');
+    const cmEl = cm.getWrapperElement();
+    cmEl.style.height = 'auto';
+    cmEl.style.minHeight = '0';
+    cmEl.style.maxHeight = '120px';
+    cmEl.style.padding = '0';
+    const scrollEl = cmEl.querySelector('.CodeMirror-scroll');
+    if (scrollEl) {
+        scrollEl.style.minHeight = '24px';
+        scrollEl.style.maxHeight = '120px';
+        scrollEl.style.padding = '0';
+        scrollEl.style.margin = '0';
     }
-    easyMDE.codemirror.refresh();
+    const sizerEl = cmEl.querySelector('.CodeMirror-sizer');
+    if (sizerEl) {
+        sizerEl.style.minHeight = '0';
+        sizerEl.style.padding = '0';
+    }
+    cm.refresh();
     easyMDE.codemirror.on('keydown', (cm, e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();

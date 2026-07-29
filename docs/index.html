@@ -8,10 +8,12 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="styles.css?v=2">
+    <link rel="stylesheet" href="styles.css?v=3">
     <style>
-        .EasyMDEContainer .CodeMirror { height: auto !important; min-height: 0 !important; max-height: 120px !important; }
-        .EasyMDEContainer .CodeMirror-scroll { min-height: 20px !important; max-height: 120px !important; }
+        .EasyMDEContainer { flex: 1; min-width: 0; }
+        .EasyMDEContainer .CodeMirror { height: auto !important; min-height: 0 !important; max-height: 120px !important; padding: 0 !important; }
+        .EasyMDEContainer .CodeMirror-scroll { min-height: 24px !important; max-height: 120px !important; padding: 0 !important; margin: 0 !important; }
+        .CodeMirror-sizer { min-height: 0 !important; padding: 0 !important; }
         .input-area { padding: 0.25rem 1rem 0.5rem !important; }
     </style>
 </head>
@@ -214,6 +216,6 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
-    <script src="app.js?v=2"></script>
+    <script src="app.js?v=3"></script>
 </body>
 </html>
