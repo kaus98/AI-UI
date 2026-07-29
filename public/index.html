@@ -3,20 +3,17 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>AI Chat Interface</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <!-- Segoe UI is a system font; no external import needed -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <!-- EasyMDE -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="styles.css?v=2">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
-    <!-- FontAwesome (Required for EasyMDE Toolbar) -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 
 <body>
@@ -35,6 +32,7 @@
                 <!-- Chat items will be injected here -->
             </div>
         </aside>
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
         <section class="main-content">
             <!-- Sidebar / Header -->
@@ -149,7 +147,7 @@
                     <div class="form-group">
                         <label>Preset</label>
                         <select id="edit-preset"
-                            style="width: 100%; padding: 0.75rem; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            style="width: 100%; padding: 0.75rem; background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
                             <option value="custom">Custom</option>
                             <option value="openai">OpenAI</option>
                             <option value="google">Google Gemini</option>
@@ -172,7 +170,7 @@
                     <div class="form-group">
                         <label>Auth Type</label>
                         <select id="edit-auth-type"
-                            style="width: 100%; padding: 0.75rem; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            style="width: 100%; padding: 0.75rem; background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
                             <option value="api-key">API Key</option>
                             <option value="oauth2">OAuth 2.0 (Client Credentials)</option>
                         </select>

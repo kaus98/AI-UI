@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>AI Chat</title>
+    <!-- Segoe UI is a system font; no external import needed -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="styles.css?v=2">
+    <style>
+        .EasyMDEContainer .CodeMirror { height: auto !important; min-height: 0 !important; max-height: 120px !important; }
+        .EasyMDEContainer .CodeMirror-scroll { min-height: 20px !important; max-height: 120px !important; }
+        .input-area { padding: 0.25rem 1rem 0.5rem !important; }
+    </style>
+</head>
+<body>
+    <!-- Onboarding / Setup -->
+    <div id="setup-screen" class="setup-screen">
+        <div class="setup-card">
+            <div class="setup-brand">
+                <div class="logo-icon">AI</div>
+                <h1>AI Chat</h1>
+            </div>
+            <p class="setup-desc">Configure at least one API endpoint to get started. All endpoints, settings, and chats are stored in your browser.</p>
+            <div class="setup-tabs">
+                <button class="setup-tab active" data-tab="paste">Paste Config</button>
+                <button class="setup-tab" data-tab="add">Add Endpoint</button>
+            </div>
+            <div class="setup-panels">
+                <div id="setup-paste" class="setup-panel active">
+                    <label>JSON Config</label>
+                    <textarea id="config-paste" class="config-paste" placeholder='{&#10;  "endpoints": [&#10;    {&#10;      "id": "openai",&#10;      "name": "OpenAI",&#10;      "baseUrl": "https://api.openai.com/v1",&#10;      "authType": "api-key",&#10;      "apiKey": "sk-..."&#10;    }&#10;  ]&#10;}'></textarea>
+                    <button id="load-config-btn" class="primary-btn">Load Config</button>
+                </div>
+                <div id="setup-add" class="setup-panel">
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="setup-name" placeholder="e.g. OpenAI">
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL</label>
+                        <input type="text" id="setup-baseurl" placeholder="https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>Auth Type</label>
+                        <select id="setup-authtype">
+                            <option value="api-key">API Key</option>
+                            <option value="oauth2">OAuth2 Client Credentials</option>
+                        </select>
+                    </div>
+                    <div id="setup-apikey-group" class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="setup-key" placeholder="sk-...">
+                    </div>
+                    <div id="setup-oauth-group" class="oauth-fields hidden">
+                        <div class="form-group">
+                            <label>Token URL</label>
+                            <input type="text" id="setup-tokenurl" placeholder="https://.../token">
+                        </div>
+                        <div class="form-group">
+                            <label>Client ID</label>
+                            <input type="text" id="setup-clientid" placeholder="Client ID">
+                        </div>
+                        <div class="form-group">
+                            <label>Client Secret</label>
+                            <input type="password" id="setup-clientsecret" placeholder="Client Secret">
+                        </div>
+                        <div class="form-group">
+                            <label>Scope (Optional)</label>
+                            <input type="text" id="setup-scope" placeholder="api://default">
+                        </div>
+                    </div>
+                    <button id="add-setup-endpoint-btn" class="primary-btn">Add Endpoint</button>
+                </div>
+            </div>
+            <div id="setup-error" class="setup-error hidden"></div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app-container hidden">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <button id="new-chat-btn" class="new-chat-btn">
+                    <i class="fa-solid fa-plus"></i>
+                    New Chat
+                </button>
+            </div>
+            <div class="chat-list" id="chat-list"></div>
+        </aside>
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+        <section class="main-content">
+            <header class="chat-header">
+                <div class="header-left">
+                    <button class="menu-btn" id="menu-btn" aria-label="Toggle Menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
+                    <div class="logo">
+                        <span class="logo-icon">AI</span>
+                        <div class="endpoint-selector-wrapper">
+                            <select id="endpoint-select" class="endpoint-select"></select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls">
+                    <button id="settings-btn" class="icon-btn" title="Settings">
+                        <i class="fa-solid fa-gear"></i>
+                    </button>
+                    <select id="model-select" class="model-select">
+                        <option value="" disabled selected>Loading models...</option>
+                    </select>
+                    <button id="refresh-models-btn" class="icon-btn" title="Refresh Models">
+                        <i class="fa-solid fa-rotate"></i>
+                    </button>
+                    <div class="status-indicator" id="status-indicator" title="Connected"></div>
+                </div>
+            </header>
+
+            <main class="chat-area" id="chat-container">
+                <div class="welcome-message">
+                    <h2>Welcome</h2>
+                    <p>Select a model and start chatting.</p>
+                </div>
+            </main>
+
+            <footer class="input-area">
+                <div class="input-container">
+                    <div id="image-preview-container" class="image-preview-container hidden"></div>
+                    <input type="file" id="image-upload" accept="image/*" multiple style="display: none;">
+                    <div class="input-row">
+                        <textarea id="user-input" placeholder="Type a message..."></textarea>
+                        <button id="attach-btn" title="Attach Image">
+                            <i class="fa-solid fa-paperclip"></i>
+                        </button>
+                        <button id="send-btn">
+                            <i class="fa-solid fa-arrow-up"></i>
+                        </button>
+                    </div>
+                </div>
+            </footer>
+        </section>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>Endpoints</h3>
+                <div id="endpoints-list" class="endpoints-list"></div>
+                <button id="add-endpoint-btn" class="secondary-btn">+ Add Endpoint</button>
+
+                <div id="endpoint-form" class="endpoint-form hidden">
+                    <h4 id="form-title">Add Endpoint</h4>
+                    <input type="hidden" id="edit-id">
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="edit-name" placeholder="e.g. OpenAI">
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL</label>
+                        <input type="text" id="edit-url" placeholder="https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>Auth Type</label>
+                        <select id="edit-auth-type">
+                            <option value="api-key">API Key</option>
+                            <option value="oauth2">OAuth2 Client Credentials</option>
+                        </select>
+                    </div>
+                    <div id="edit-apikey-group" class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="edit-key" placeholder="sk-...">
+                    </div>
+                    <div id="edit-oauth-group" class="oauth-fields hidden">
+                        <div class="form-group">
+                            <label>Token URL</label>
+                            <input type="text" id="edit-token-url" placeholder="https://.../token">
+                        </div>
+                        <div class="form-group">
+                            <label>Client ID</label>
+                            <input type="text" id="edit-client-id" placeholder="Client ID">
+                        </div>
+                        <div class="form-group">
+                            <label>Client Secret</label>
+                            <input type="password" id="edit-client-secret" placeholder="Client Secret">
+                        </div>
+                        <div class="form-group">
+                            <label>Scope (Optional)</label>
+                            <input type="text" id="edit-scope" placeholder="api://default">
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button id="cancel-edit-btn" class="ghost-btn">Cancel</button>
+                        <button id="save-endpoint-btn" class="primary-btn">Save</button>
+                    </div>
+                </div>
+
+                <div class="settings-actions">
+                    <button id="export-config-btn" class="secondary-btn">Export Config</button>
+                    <button id="clear-chats-btn" class="danger-btn">Clear Chats</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+    <script src="app.js?v=2"></script>
+</body>
+</html>

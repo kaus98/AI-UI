@@ -11,7 +11,7 @@ const LOGS_DIR = path.join(__dirname, 'logs');
 
 // Middleware Setup
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3001;
 
 const favicon = require('serve-favicon');
 app.use(favicon(path.join(__dirname, 'public', 'favicon.png')));

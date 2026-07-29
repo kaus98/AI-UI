@@ -8,6 +8,7 @@ const chatListDiv = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
 const menuBtn = document.getElementById('menu-btn');
 const sidebar = document.getElementById('sidebar');
+const sidebarOverlay = document.getElementById('sidebar-overlay');
 
 // Image Upload Elements
 const imageUploadInput = document.getElementById('image-upload');
@@ -234,7 +235,7 @@ async function fetchModels() {
             });
             if (data.data.length > 0) modelSelect.value = data.data[0].id;
 
-            statusIndicator.style.backgroundColor = '#2ea043';
+            statusIndicator.style.backgroundColor = '#0e7a0d';
             statusIndicator.title = 'Connected';
 
             // Initial check
@@ -242,7 +243,7 @@ async function fetchModels() {
         }
     } catch (e) {
         console.error(e);
-        statusIndicator.style.backgroundColor = '#d73a49';
+        statusIndicator.style.backgroundColor = '#c50f1f';
         statusIndicator.title = 'Connection Failed';
         showError('Failed to fetch models: ' + e.message);
         logToServer('ERROR', 'Failed to fetch models', e.message);
@@ -387,7 +388,7 @@ function renderMessages() {
                         id="system-prompt-input" 
                         class="system-prompt-input" 
                         placeholder="Enter the system prompt text..."
-                        style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-primary); min-height: 80px; resize: vertical;"
+                        style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-primary); min-height: 80px; resize: vertical;"
                     >${chat && chat.systemPromptDraft ? chat.systemPromptDraft : ''}</textarea>
 
                     <!-- Temperature -->
@@ -495,7 +496,34 @@ function appendMessageDiv(role, content, type, preRendered = null) {
         htmlContent = marked.parse(content || '');
     }
 
-    msgDiv.innerHTML = `<div class="message-content markdown-body">${htmlContent}</div>`;
+    msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-actions"><button class="msg-action-btn msg-copy-btn" title="Copy"><i class="fa-regular fa-copy"></i></button><button class="msg-action-btn msg-collapse-btn" title="Collapse"><i class="fa-solid fa-chevron-up"></i></button></div><div class="msg-body">${htmlContent}</div></div>`;
+
+    // Wire up copy button
+    const copyBtn = msgDiv.querySelector('.msg-copy-btn');
+    copyBtn.addEventListener('click', () => {
+        const text = msgDiv.querySelector('.msg-body').innerText;
+        navigator.clipboard.writeText(text).then(() => {
+            copyBtn.classList.add('copied');
+            copyBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+            setTimeout(() => {
+                copyBtn.classList.remove('copied');
+                copyBtn.innerHTML = '<i class="fa-regular fa-copy"></i>';
+            }, 1500);
+        });
+    });
+
+    // Wire up collapse button
+    const collapseBtn = msgDiv.querySelector('.msg-collapse-btn');
+    collapseBtn.addEventListener('click', () => {
+        const contentEl = msgDiv.querySelector('.message-content');
+        const isCollapsed = contentEl.classList.toggle('collapsed');
+        collapseBtn.classList.toggle('collapsed', isCollapsed);
+        collapseBtn.title = isCollapsed ? 'Expand' : 'Collapse';
+        collapseBtn.innerHTML = isCollapsed
+            ? '<i class="fa-solid fa-chevron-down"></i>'
+            : '<i class="fa-solid fa-chevron-up"></i>';
+    });
+
     chatContainer.appendChild(msgDiv);
     return msgDiv;
 }
@@ -734,12 +762,12 @@ async function sendMessage() {
     // userInput.style.height = 'auto'; // EasyMDE handles size
 
     state.isGenerating = true;
-    statusIndicator.style.backgroundColor = '#eab308'; // Yellow (Thinking)
+    statusIndicator.style.backgroundColor = '#f7630c'; // Yellow (Thinking)
 
     // Create AI Placeholder
     const aiMsgDiv = appendMessageDiv('AI', '', 'ai');
-    const aiContentDiv = aiMsgDiv.querySelector('.message-content');
-    aiContentDiv.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+    const aiBodyDiv = aiMsgDiv.querySelector('.msg-body');
+    aiBodyDiv.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
     scrollToBottom();
 
     try {
@@ -827,12 +855,22 @@ function initEasyMDE() {
         ],
         forceSync: true,
         placeholder: "Message AI...",
-        minHeight: "45px", // Small initial height
-        maxHeight: "200px",
+        minHeight: "0px",
+        maxHeight: "120px",
         shortcuts: {
             "togglePreview": null, // Keep preview button but maybe disable shortcut if it conflicts
         },
     });
+
+    // Force compact CodeMirror height
+    window.easyMDE.codemirror.setSize('100%', 'auto');
+    const cm = window.easyMDE.codemirror.getWrapperElement();
+    if (cm) {
+        cm.style.height = 'auto';
+        cm.style.minHeight = '0px';
+        cm.style.maxHeight = '120px';
+    }
+    window.easyMDE.codemirror.refresh();
 
     // Custom Key Handler for Enter to Send
     window.easyMDE.codemirror.setOption("extraKeys", {
@@ -857,7 +895,14 @@ newChatBtn.addEventListener('click', async () => {
     const id = await createNewChat();
     setCurrentChat(id);
 });
-menuBtn.addEventListener('click', () => sidebar.classList.toggle('open'));
+menuBtn.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+    sidebarOverlay.classList.toggle('show');
+});
+sidebarOverlay.addEventListener('click', () => {
+    sidebar.classList.remove('open');
+    sidebarOverlay.classList.remove('show');
+});
 
 // Settings Listeners
 settingsBtn.addEventListener('click', () => settingsModal.style.display = 'block');
