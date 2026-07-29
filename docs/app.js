@@ -198,7 +198,7 @@ async function loadModels() {
     modelSelect.innerHTML = '<option value="" disabled selected>Loading models...</option>';
     statusIndicator.style.backgroundColor = '#f7630c';
     try {
-        const res = await fetch('/api/models', {
+        const res = await fetch('api/models', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ endpoint: ep })
@@ -420,7 +420,7 @@ async function sendMessage() {
 
     try {
         const ep = currentEndpoint();
-        const res = await fetch('/api/chat', {
+        const res = await fetch('api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
