@@ -1,6 +1,7 @@
 const path = require('path');
 const fsPromises = require('fs').promises;
 const fs = require('fs');
+const crypto = require('crypto');
 const { logToFile } = require('./logger');
 
 // Config Paths
@@ -12,26 +13,130 @@ const MODELS_FILE = path.join(DATA_DIR, 'models.json');
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
+// Optional Cloudflare proxy for outbound AI calls
+const PROXY_BASE_URL = (process.env.CLOUDFLARE_PROXY_BASE_URL || process.env.PROXY_BASE_URL || '').replace(/\/+$/, '');
+
 // --- Config Configuration ---
 
+function generateUnifiedApiKey() {
+    return 'ag-' + crypto.randomBytes(32).toString('hex');
+}
+
 async function getConfig() {
+    let config;
+    let configExisted = false;
+    let isNewConfig = false;
     try {
         const data = await fsPromises.readFile(CONFIG_FILE, 'utf8');
-        const config = JSON.parse(data);
-        // Ensure structure
-        if (!config.endpoints) config.endpoints = [];
-
-        // Ensure Unified API Key exists
-        if (!config.unifiedApiKey) {
-            config.unifiedApiKey = 'ag-' + Date.now().toString(36) + Math.random().toString(36).substr(2);
-            await saveConfig(config); // Save immediately
-            console.log('Generated Unified API Key:', config.unifiedApiKey);
-        }
-
-        return config;
+        config = JSON.parse(data);
+        configExisted = true;
     } catch (e) {
-        return { endpoints: [], currentEndpointId: null, unifiedApiKey: null };
+        console.error('Failed to load config.json:', e.message);
+        config = { endpoints: [], currentEndpointId: null, unifiedApiKey: null };
+        isNewConfig = true;
+        if (e.code !== 'ENOENT') {
+            // Back up a corrupt config file before we overwrite it.
+            try {
+                await fsPromises.rename(CONFIG_FILE, `${CONFIG_FILE}.bak`);
+            } catch (backupErr) {
+                console.error('Failed to back up corrupt config.json:', backupErr.message);
+            }
+        }
     }
+
+    // Ensure structure
+    if (!config.endpoints) config.endpoints = [];
+
+    // Normalize IDs and endpoint defaults
+    if (config.currentEndpointId != null) config.currentEndpointId = String(config.currentEndpointId);
+    config.endpoints.forEach(e => {
+        if (e.id != null) e.id = String(e.id);
+        if (e.authType == null) e.authType = 'api-key';
+        if (e.systemPrompt == null) e.systemPrompt = '';
+        if (e.defaultModel == null) e.defaultModel = '';
+        if (e.stream == null) e.stream = true;
+        if (e.inputCost == null) e.inputCost = 0;
+        if (e.outputCost == null) e.outputCost = 0;
+        if (e.apiKey == null) e.apiKey = null;
+        if (e.clientSecret == null) e.clientSecret = null;
+        if (e.tokenUrl == null) e.tokenUrl = null;
+        if (e.clientId == null) e.clientId = null;
+        if (e.scope == null) e.scope = null;
+    });
+
+    // Ensure tools list exists with defaults
+    if (!Array.isArray(config.tools)) config.tools = [];
+    const defaultTools = [
+        {
+            id: 'web_search',
+            name: 'web_search',
+            description: 'Search the web for current, factual, or real-time information.',
+            enabled: false,
+            handler: 'web_search',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'The search query.' }
+                },
+                required: ['query']
+            }
+        },
+        {
+            id: 'url_fetch',
+            name: 'url_fetch',
+            description: 'Fetch and read the text content of any public webpage. Falls back to Selenium if direct HTTP fails.',
+            enabled: true,
+            handler: 'url_fetch',
+            parameters: {
+                type: 'object',
+                properties: {
+                    url: { type: 'string', description: 'The full URL of the webpage to fetch.' }
+                },
+                required: ['url']
+            }
+        },
+        {
+            id: 'wikipedia',
+            name: 'wikipedia',
+            description: 'Search Wikipedia for a topic and return a short summary.',
+            enabled: false,
+            handler: 'wikipedia',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'The topic to search on Wikipedia.' }
+                },
+                required: ['query']
+            }
+        }
+    ];
+    const knownIds = new Set(config.tools.map(t => t.id));
+    let addedTool = false;
+    for (const tool of defaultTools) {
+        if (!knownIds.has(tool.id)) {
+            config.tools.push(tool);
+            addedTool = true;
+        }
+    }
+    if (addedTool) {
+        try { await saveConfig(config); } catch (e) { console.error('Failed to save default tools:', e); }
+    }
+
+    // Ensure search engine setting exists
+    if (!config.searchEngine) config.searchEngine = 'auto';
+
+    // Ensure a cryptographically secure Unified API Key exists
+    if (!config.unifiedApiKey) {
+        config.unifiedApiKey = generateUnifiedApiKey();
+        console.log('Generated Unified API Key:', config.unifiedApiKey);
+        try {
+            await saveConfig(config);
+        } catch (saveErr) {
+            console.error('Failed to save generated unified API key:', saveErr);
+        }
+    }
+
+    return config;
 }
 
 async function saveConfig(config) {
@@ -54,8 +159,8 @@ async function saveHistory(chats) {
 
 function getEndpoint(config, id) {
     if (!config.endpoints) return null;
-    if (id) return config.endpoints.find(e => e.id === id);
-    return config.endpoints.find(e => e.id === config.currentEndpointId) || config.endpoints[0];
+    const searchId = id != null ? String(id) : String(config.currentEndpointId);
+    return config.endpoints.find(e => String(e.id) === searchId) || (id ? null : config.endpoints[0]);
 }
 
 // --- Models Configuration ---
@@ -80,7 +185,7 @@ const tokenCache = {}; // Map<endpointId, { token, expiresAt }>
 async function getOrRefreshAccessToken(endpoint, config) {
     // 1. If not OAuth, return API key (shim)
     if (endpoint.authType !== 'oauth2') {
-        return endpoint.apiKey;
+        return endpoint.apiKey || null;
     }
 
     // 2. Check if current token is valid (with 5 min buffer)
@@ -128,20 +233,28 @@ async function getOrRefreshAccessToken(endpoint, config) {
     }
 }
 
+// Build a direct or Cloudflare-proxied URL for an OpenAI-style path
+function buildAiUrl(baseUrl, openaiPath) {
+    const base = baseUrl.replace(/\/+$/, '');
+    const needsV1 = !base.endsWith('/v1');
+    const fullPath = needsV1 ? `/v1${openaiPath}` : openaiPath;
+    if (PROXY_BASE_URL) return `${PROXY_BASE_URL}${fullPath}?target=${encodeURIComponent(base)}`;
+    return `${base}${fullPath}`;
+}
+
 // Helper to fetch from a single endpoint
 async function fetchModelsFromEndpoint(endpoint, config) {
     const authToken = await getOrRefreshAccessToken(endpoint, config);
-    const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
-    const targetUrl = `${baseUrl}/models`;
+    const targetUrl = buildAiUrl(endpoint.baseUrl, '/models');
 
     logToFile('server', `Fetching models from ${endpoint.name}`, { url: targetUrl });
 
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
     const response = await fetch(targetUrl, {
         method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-        },
+        headers,
     });
 
     if (!response.ok) {
@@ -182,6 +295,7 @@ module.exports = {
     saveCachedModels,
     getOrRefreshAccessToken,
     fetchModelsFromEndpoint,
+    buildAiUrl,
     // Export cache if needed, though usually internal
     tokenCache
 };

@@ -2,10 +2,11 @@
   "name": "ag-aiendpoints",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node tests/search.test.js",
     "start": "node server.js",
+    "dev": "node --watch server.js",
     "debug": "node --inspect=9229 server.js"
   },
   "keywords": [],
@@ -15,6 +16,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.2.1",
+    "selenium-webdriver": "^4.47.0",
     "serve-favicon": "^2.5.1"
   }
 }

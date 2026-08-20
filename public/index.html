@@ -4,13 +4,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>AI Chat Interface</title>
     <!-- Segoe UI is a system font; no external import needed -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <!-- EasyMDE -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="styles.css?v=2">
+    <link rel="stylesheet" href="styles.css?v=7">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
@@ -29,7 +32,19 @@
                 </button>
             </div>
             <div class="chat-list" id="chat-list">
-                <!-- Chat items will be injected here -->
+                <div class="search-bar" style="padding: 0 0.5rem 0.5rem;">
+                    <input type="text" id="chat-search" placeholder="Search chats...">
+                </div>
+                <div class="folder-list" id="folder-list">
+                    <span class="folder-pill active" data-folder="All">All</span>
+                    <span class="folder-pill" data-folder="General">General</span>
+                    <span class="folder-pill" data-folder="Work">Work</span>
+                    <span class="folder-pill" data-folder="Personal">Personal</span>
+                    <span class="folder-pill" data-folder="Archive">Archive</span>
+                </div>
+                <div id="chat-items" style="display:flex; flex-direction:column; gap:2px;">
+                    <!-- Chat items will be injected here -->
+                </div>
             </div>
         </aside>
         <div class="sidebar-overlay" id="sidebar-overlay"></div>
@@ -58,6 +73,22 @@
                 </div>
 
                 <div class="controls">
+                    <select id="preset-select" class="model-select" style="max-width:160px;">
+                        <option value="">No Agent</option>
+                    </select>
+                    <button id="theme-toggle-btn" class="icon-btn" title="Toggle theme">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                    </button>
                     <button id="settings-btn" class="icon-btn" title="Settings">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
@@ -112,6 +143,14 @@
                             </svg>
                         </button>
 
+                        <div id="tools-bar" class="tools-bar"></div>
+
+                        <button id="stop-btn" class="stop-btn" type="button" title="Stop generating" hidden>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <rect x="6" y="6" width="12" height="12" rx="2" />
+                            </svg>
+                        </button>
                         <button id="send-btn">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
                                 xmlns="http://www.w3.org/2000/svg">
@@ -133,12 +172,18 @@
                 <button class="close-btn">&times;</button>
             </div>
             <div class="modal-body">
-                <h3>Endpoints</h3>
-                <div id="endpoints-list" class="endpoints-list">
-                    <!-- Endpoints injected here -->
+                <div class="settings-section">
+                    <button class="settings-section-header" data-target="endpoints-section">
+                        <h3>Endpoints</h3>
+                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="endpoints-section" class="settings-section-content">
+                        <div id="endpoints-list" class="endpoints-list">
+                            <!-- Endpoints injected here -->
+                        </div>
+                        <button id="add-endpoint-btn" class="secondary-btn">+ Add Endpoint</button>
+                    </div>
                 </div>
-
-                <button id="add-endpoint-btn" class="secondary-btn">+ Add Endpoint</button>
 
                 <!-- Edit Form (Hidden by default) -->
                 <div id="endpoint-form" class="endpoint-form hidden">
@@ -165,6 +210,28 @@
                     <div class="form-group">
                         <label>Base URL</label>
                         <input type="text" id="edit-url" placeholder="https://api.openai.com/v1">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Default Model</label>
+                        <input type="text" id="edit-default-model" placeholder="e.g. gpt-4o-mini (optional)">
+                    </div>
+                    <div class="form-group form-inline" style="display:flex; align-items:center; gap:0.5rem;">
+                        <input type="checkbox" id="edit-stream" checked>
+                        <label for="edit-stream" style="margin:0;">Enable streaming for this endpoint</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Input cost per 1M tokens</label>
+                        <input type="number" id="edit-input-cost" placeholder="0.00" step="0.01" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label>Output cost per 1M tokens</label>
+                        <input type="number" id="edit-output-cost" placeholder="0.00" step="0.01" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label>System Prompt</label>
+                        <textarea id="edit-system-prompt" rows="3" placeholder="Optional default system prompt for this endpoint..."
+                            style="width: 100%; padding: 0.75rem; background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px; resize: vertical;"></textarea>
                     </div>
 
                     <div class="form-group">
@@ -206,21 +273,121 @@
                         <button id="save-endpoint-btn" class="primary-btn">Save</button>
                     </div>
                 </div>
+
+                <div class="settings-section">
+                    <button class="settings-section-header" data-target="agents-section">
+                        <h3>Agents</h3>
+                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="agents-section" class="settings-section-content">
+                        <div id="presets-list" class="endpoints-list">
+                            <!-- Agents injected here -->
+                        </div>
+                        <button id="add-preset-btn" class="secondary-btn">+ Add Agent</button>
+                    </div>
+                </div>
+
+                <div id="preset-form" class="endpoint-form hidden">
+                    <h4 id="preset-form-title">Add Agent</h4>
+                    <input type="hidden" id="preset-edit-id">
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="preset-name" placeholder="e.g. Coding Assistant">
+                    </div>
+                    <div class="form-group">
+                        <label>Endpoint</label>
+                        <select id="preset-endpoint" style="width:100%; padding:0.75rem; background:var(--card-bg); border:1px solid var(--border-color); color:var(--text-primary); border-radius:6px;"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Model ID</label>
+                        <input type="text" id="preset-model" placeholder="Optional model id">
+                    </div>
+                    <div class="form-group">
+                        <label>System Prompt</label>
+                        <textarea id="preset-prompt" rows="3" placeholder="System prompt..."
+                            style="width:100%; padding:0.75rem; background:var(--card-bg); border:1px solid var(--border-color); color:var(--text-primary); border-radius:6px; resize:vertical;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Tags (comma separated)</label>
+                        <input type="text" id="preset-tags" placeholder="coding, python">
+                    </div>
+                    <div class="form-actions">
+                        <button id="cancel-preset-btn" class="ghost-btn">Cancel</button>
+                        <button id="save-preset-btn" class="primary-btn">Save</button>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <button class="settings-section-header" data-target="tools-section">
+                        <h3>Tools</h3>
+                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="tools-section" class="settings-section-content">
+                        <div id="settings-tools-list" class="endpoints-list">
+                            <!-- Tools injected here -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <button class="settings-section-header" data-target="search-section">
+                        <h3>Search Engine</h3>
+                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="search-section" class="settings-section-content">
+                        <div class="form-group">
+                            <label>Search Engine</label>
+                            <select id="search-engine-select" style="width:100%; padding:0.75rem; background:var(--card-bg); border:1px solid var(--border-color); color:var(--text-primary); border-radius:6px;">
+                                <option value="auto">Auto (random fallback)</option>
+                                <option value="duckduckgo">DuckDuckGo</option>
+                                <option value="bing">Bing</option>
+                                <option value="yahoo">Yahoo</option>
+                                <option value="startpage">Startpage</option>
+                            </select>
+                        </div>
+                        <div class="form-actions" style="margin-top:0.5rem;">
+                            <button id="save-search-engine-btn" class="primary-btn">Save Search Engine</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <button class="settings-section-header" data-target="proxy-section">
+                        <h3>Cloudflare Proxy</h3>
+                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="proxy-section" class="settings-section-content">
+                        <div class="form-group">
+                            <label>Proxy Base URL</label>
+                            <input type="text" id="proxy-base-url" placeholder="https://aiui-proxy.YOUR_SUBDOMAIN.workers.dev">
+                        </div>
+                        <div class="form-actions" style="margin-top:0.5rem;">
+                            <button id="save-proxy-btn" class="primary-btn">Save Proxy URL</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <button class="settings-section-header" data-target="data-section">
+                        <h3>Data</h3>
+                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="data-section" class="settings-section-content">
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button id="export-chats-btn" class="secondary-btn">Export Chats</button>
+                            <button id="import-chats-btn" class="secondary-btn">Import Chats</button>
+                            <input type="file" id="import-chats-input" accept="application/json,.json" style="display:none;">
+                            <button id="clear-cache-btn" class="danger-btn">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                                Clear All Caches
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    <script src="app.js"></script>
+    <script src="app.js?v=14"></script>
 </body>
 
 </html>
-<style>
-    @keyframes spin {
-        100% {
-            transform: rotate(360deg);
-        }
-    }
-
-    .spinning svg {
-        animation: spin 1s linear infinite;
-    }
-</style>

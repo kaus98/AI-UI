@@ -1,16 +1,28 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const { logToFile } = require('../utils/logger');
 const { getConfig, getOrRefreshAccessToken } = require('../utils/helpers');
+
 // Middleware for Unified API Token Check
 async function checkUnifiedAuth(req, res, next) {
     const config = await getConfig();
     const authHeader = req.headers.authorization;
 
-    // Allow if no key is configured (dev mode) or matches
-    if (!config.unifiedApiKey) return next();
+    // A unified API key is required. getConfig auto-generates one if missing,
+    // so an empty key here means the configuration is not yet initialized.
+    if (!config.unifiedApiKey) {
+        return res.status(401).json({ error: 'Unauthorized: Unified API Key not configured' });
+    }
 
-    if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.split(' ')[1] !== config.unifiedApiKey) {
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+    if (!token || token.length !== config.unifiedApiKey.length) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid Unified API Key' });
+    }
+
+    const provided = Buffer.from(token);
+    const expected = Buffer.from(config.unifiedApiKey);
+    if (!crypto.timingSafeEqual(provided, expected)) {
         return res.status(401).json({ error: 'Unauthorized: Invalid Unified API Key' });
     }
     next();
@@ -104,6 +116,12 @@ router.post('/chat/completions', checkUnifiedAuth, async (req, res) => {
         // Prepare Request
         const authToken = await getOrRefreshAccessToken(endpoint, config);
         const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+
+        // Sanitize messages if present: only role and content should reach upstream APIs
+        if (rest.messages && Array.isArray(rest.messages)) {
+            rest.messages = rest.messages.map(msg => ({ role: msg.role, content: msg.content }));
+        }
+
         const payload = { model: realModelId, ...rest };
 
         // Forward
@@ -114,12 +132,12 @@ router.post('/chat/completions', checkUnifiedAuth, async (req, res) => {
             payload: payload
         });
 
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
         const response = await fetch(`${baseUrl}/chat/completions`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json'
-            },
+            headers,
             body: JSON.stringify(payload)
         });
 
@@ -209,12 +227,12 @@ router.post('/completions', checkUnifiedAuth, async (req, res) => {
             payload: payload
         });
 
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
         const response = await fetch(`${baseUrl}/completions`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json'
-            },
+            headers,
             body: JSON.stringify(payload)
         });
 

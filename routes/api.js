@@ -11,8 +11,79 @@ const {
     saveCachedModels,
     getOrRefreshAccessToken,
     fetchModelsFromEndpoint,
+    buildAiUrl,
     tokenCache
 } = require('../utils/helpers');
+const { searchDuckDuckGo } = require('../utils/search');
+const { executeTool, setSearchEngine } = require('../utils/tools');
+
+function sendSseDelta(res, content) {
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content } }] }) }\n\n`);
+}
+
+function sendSseDone(res) {
+    res.write('data: [DONE]\n\n');
+    res.end();
+}
+
+async function pipeUpstreamToClient(response, res) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let streamEnded = false;
+
+    res.on('error', (err) => {
+        if (!streamEnded) {
+            streamEnded = true;
+            console.error('Response stream error:', err.message);
+            try { reader.cancel(); } catch {}
+        }
+    });
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (streamEnded) break;
+        const chunk = decoder.decode(value, { stream: true });
+        res.write(chunk);
+        if (typeof res.flush === 'function') res.flush();
+    }
+    if (!streamEnded) {
+        streamEnded = true;
+        res.end();
+    }
+}
+
+function pseudoArgsToObject(argsStr) {
+    const obj = {};
+    const re = /([a-zA-Z0-9_]+)\s*:\s*(?:"([^"]*)"|'([^']*)'|([^,}\s]+))/g;
+    let m;
+    while ((m = re.exec(argsStr)) !== null) {
+        const key = m[1];
+        const value = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+        obj[key] = value;
+    }
+    return obj;
+}
+
+function parseCustomToolCalls(content) {
+    const calls = [];
+    if (!content || typeof content !== 'string') return calls;
+    const re = /<\|tool_call>call:([a-zA-Z0-9_]+)\{([^}]*)\}<tool_call\|>/g;
+    let m;
+    let callIndex = 0;
+    while ((m = re.exec(content)) !== null) {
+        const name = m[1];
+        const args = pseudoArgsToObject(m[2]);
+        calls.push({
+            id: `custom_${callIndex++}`,
+            function: { name, arguments: JSON.stringify(args) }
+        });
+    }
+    return calls;
+}
 
 // Log ingestion from client
 router.post('/logs', (req, res) => {
@@ -23,12 +94,22 @@ router.post('/logs', (req, res) => {
 
 router.get('/endpoints', async (req, res) => {
     const config = await getConfig();
-    // Return safe version
+    // Return safe version (no actual secrets)
     const safeEndpoints = config.endpoints.map(e => ({
         id: e.id,
         name: e.name,
         baseUrl: e.baseUrl,
-        hasKey: !!e.apiKey
+        authType: e.authType || 'api-key',
+        hasKey: !!e.apiKey,
+        systemPrompt: e.systemPrompt || '',
+        defaultModel: e.defaultModel || '',
+        stream: e.stream !== false,
+        inputCost: Number.isNaN(Number(e.inputCost)) ? 0 : Number(e.inputCost),
+        outputCost: Number.isNaN(Number(e.outputCost)) ? 0 : Number(e.outputCost),
+        tokenUrl: e.tokenUrl || '',
+        clientId: e.clientId || '',
+        hasSecret: !!e.clientSecret,
+        scope: e.scope || ''
     }));
     res.json({
         endpoints: safeEndpoints,
@@ -39,32 +120,44 @@ router.get('/endpoints', async (req, res) => {
 router.post('/endpoints', async (req, res) => {
     try {
         const config = await getConfig();
-        const { id, name, apiKey, baseUrl, authType, tokenUrl, clientId, clientSecret, scope } = req.body;
+        const { id, name, apiKey, baseUrl, authType, tokenUrl, clientId, clientSecret, scope, systemPrompt, defaultModel, stream, inputCost, outputCost } = req.body;
+
+        // Normalize numeric/boolean fields
+        const parsedInputCost = Number.isNaN(Number(inputCost)) ? 0 : Number(inputCost);
+        const parsedOutputCost = Number.isNaN(Number(outputCost)) ? 0 : Number(outputCost);
+        const parsedStream = stream !== false;
 
         let endpoint = config.endpoints.find(e => e.id === id);
+        let resolvedId = id; // track the ID for cache clearing later
 
         if (endpoint) {
             // Update
             endpoint.name = name;
             endpoint.baseUrl = baseUrl;
-            endpoint.apiKey = apiKey || null; // Allow clearing key
+            if (apiKey) endpoint.apiKey = apiKey; // Only overwrite key if a new one was provided
+            endpoint.systemPrompt = systemPrompt || '';
+            endpoint.defaultModel = defaultModel || '';
+            endpoint.stream = parsedStream;
+            endpoint.inputCost = parsedInputCost;
+            endpoint.outputCost = parsedOutputCost;
 
             // OAuth updates
             endpoint.authType = authType || 'api-key';
-            endpoint.tokenUrl = tokenUrl || null;
-            endpoint.clientId = clientId || null;
-            endpoint.clientSecret = clientSecret || null; // Allow clearing secret
-            endpoint.scope = scope || null;
+            if (tokenUrl !== undefined) endpoint.tokenUrl = tokenUrl || null;
+            if (clientId !== undefined) endpoint.clientId = clientId || null;
+            if (clientSecret) endpoint.clientSecret = clientSecret; // Only overwrite if provided
+            if (scope !== undefined) endpoint.scope = scope || null;
 
             // Reset token cache if creds change
             if (clientId || clientSecret || tokenUrl) {
                 delete tokenCache[endpoint.id];
             }
+            resolvedId = endpoint.id;
         } else {
             // Create
-            const newId = id || Date.now().toString();
+            resolvedId = id || Date.now().toString();
             config.endpoints.push({
-                id: newId,
+                id: resolvedId,
                 name,
                 apiKey: apiKey || null,
                 baseUrl,
@@ -72,13 +165,27 @@ router.post('/endpoints', async (req, res) => {
                 tokenUrl: tokenUrl || null,
                 clientId: clientId || null,
                 clientSecret: clientSecret || null,
-                scope: scope || null
+                scope: scope || null,
+                systemPrompt: systemPrompt || '',
+                defaultModel: defaultModel || '',
+                stream: parsedStream,
+                inputCost: parsedInputCost,
+                outputCost: parsedOutputCost
             });
             // If first one, set as default
-            if (config.endpoints.length === 1) config.currentEndpointId = newId;
+            if (config.endpoints.length === 1) config.currentEndpointId = resolvedId;
         }
 
         await saveConfig(config);
+
+        // Clear cached models for this endpoint so the next fetch picks up the new source
+        const affectedId = resolvedId;
+        const cachedModels = await getCachedModels();
+        if (cachedModels[affectedId]) {
+            delete cachedModels[affectedId];
+            await saveCachedModels(cachedModels);
+        }
+
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -93,6 +200,14 @@ router.delete('/endpoints/:id', async (req, res) => {
             config.currentEndpointId = config.endpoints.length > 0 ? config.endpoints[0].id : null;
         }
         await saveConfig(config);
+
+        // Clear cached models for the deleted endpoint
+        const cachedModels = await getCachedModels();
+        if (cachedModels[req.params.id]) {
+            delete cachedModels[req.params.id];
+            await saveCachedModels(cachedModels);
+        }
+
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -138,20 +253,23 @@ router.post('/history', async (req, res) => {
 router.get('/models', async (req, res) => {
     try {
         const config = await getConfig();
-        const endpointId = req.query.endpointId || config.currentEndpointId;
+        const requestedEndpointId = req.query.endpointId || config.currentEndpointId;
+        const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
 
-        // 1. Try Cache First
+        const endpoint = getEndpoint(config, requestedEndpointId);
+        if (!endpoint) throw new Error('No endpoint configured');
+        const endpointId = endpoint.id;
+
+        // 1. Try Cache First (unless force refresh)
         const cachedModels = await getCachedModels();
-        if (cachedModels[endpointId] && cachedModels[endpointId].length > 0) {
+        if (!forceRefresh && cachedModels[endpointId] && cachedModels[endpointId].length > 0) {
             console.log(`Serving models for ${endpointId} from cache.`);
             return res.json({ object: 'list', data: cachedModels[endpointId] });
         }
 
-        // 2. Fallback to live fetch if not in cache (optional, or force user to refresh)
+        // 2. Fallback to live fetch if not in cache or force refresh
         // For better UX, let's trigger a single fetch here if missing
         console.log(`Cache miss for ${endpointId}, fetching live...`);
-        const endpoint = getEndpoint(config, endpointId);
-        if (!endpoint) throw new Error('No endpoint configured');
 
         const models = await fetchModelsFromEndpoint(endpoint, config);
 
@@ -210,78 +328,210 @@ router.post('/models/refresh', async (req, res) => {
 router.post('/chat', async (req, res) => {
     try {
         const config = await getConfig();
-        // Client can pass endpointId optionally, otherwise verify active
         let endpoint = null;
         if (req.body.endpoint && req.body.endpoint.baseUrl) {
-            // Client-provided endpoint (e.g. docs app running in browser)
             endpoint = req.body.endpoint;
         } else {
             const endpointId = req.body.endpointId || config.currentEndpointId;
             endpoint = getEndpoint(config, endpointId);
         }
 
-        let endpointName = 'Endpoint';
-        if (endpoint) endpointName = endpoint.name || 'Endpoint';
-
         if (!endpoint) throw new Error('No endpoint configured');
 
-        // Resolve Auth Token
         const authToken = await getOrRefreshAccessToken(endpoint, config);
 
+        const activeToolIds = Array.isArray(req.body.activeTools)
+            ? req.body.activeTools
+            : (config.tools || []).filter(t => t.enabled).map(t => t.id);
+        const availableTools = (config.tools || []).filter(t => activeToolIds.includes(t.id));
+        const toolsForLLM = availableTools.map(t => ({
+            type: 'function',
+            function: { name: t.name, description: t.description, parameters: t.parameters }
+        }));
+
         // Prepare body (remove custom fields)
-        const { endpointId: _, endpoint: __, messages, ...restBody } = req.body;
+        const { endpointId: _, endpoint: __, messages, activeTools, ...restBody } = req.body;
 
-        // Sanitize messages: remove 'html' and other internal fields
-        const sanitizedMessages = messages.map(msg => {
-            const { html, ...restMsg } = msg;
-            return restMsg;
-        });
+        // Sanitize messages: only send role and content to upstream APIs
+        const sanitizedMessages = messages.map(msg => ({
+            role: msg.role,
+            content: msg.content
+        }));
 
-        const chatBody = { ...restBody, messages: sanitizedMessages };
+        let chatBody = { ...restBody, messages: sanitizedMessages };
 
-        const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
-        console.log(`Sending chat to: ${baseUrl}/chat/completions`);
+        const targetUrl = buildAiUrl(endpoint.baseUrl, '/chat/completions');
+        console.log(`Sending chat to: ${targetUrl}`);
 
-        const response = await fetch(`${baseUrl}/chat/completions`, {
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+        // If tools are active, do a non-stream call first to detect tool calls
+        if (toolsForLLM.length > 0) {
+            chatBody = { ...chatBody, tools: toolsForLLM, tool_choice: 'auto', stream: false };
+            if (!chatBody.messages.some(m => m.role === 'system')) {
+                chatBody.messages.unshift({
+                    role: 'system',
+                    content: 'You have access to the web_search tool. Use it when the question requires current, factual, or real-time information. Cite sources by number if search results are used.'
+                });
+            }
+
+            const response = await fetch(targetUrl, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(chatBody),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
+                return res.status(response.status).json(errorData);
+            }
+
+            const data = await response.json();
+            const choice = data.choices && data.choices[0];
+            const message = choice && choice.message;
+
+            const rawToolCalls = (message && message.tool_calls) || [];
+            const customToolCalls = parseCustomToolCalls(message && message.content);
+            const calls = rawToolCalls.length ? rawToolCalls : customToolCalls;
+
+            if (calls && calls.length) {
+                const toolResults = [];
+                for (const tc of calls) {
+                    const tool = availableTools.find(t => t.name === tc.function.name);
+                    let result = 'Tool not implemented.';
+                    if (tool) {
+                        const args = JSON.parse(tc.function.arguments || '{}');
+                        try {
+                            result = await executeTool(tool, args);
+                        } catch (e) {
+                            result = `Tool error: ${e.cause?.code || e.cause?.message || e.message}`;
+                        }
+                    }
+                    toolResults.push({ id: tc.id, result });
+                }
+
+                const newMessages = [...sanitizedMessages];
+                newMessages.push({
+                    role: 'assistant',
+                    content: customToolCalls.length ? null : (message.content || null),
+                    tool_calls: calls
+                });
+                for (let i = 0; i < calls.length; i++) {
+                    newMessages.push({
+                        role: 'tool',
+                        tool_call_id: toolResults[i].id,
+                        content: toolResults[i].result
+                    });
+                }
+
+                const finalBody = { ...restBody, messages: newMessages, stream: true };
+                const finalResponse = await fetch(targetUrl, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(finalBody),
+                });
+
+                if (!finalResponse.ok) {
+                    const errorData = await finalResponse.json().catch(() => ({ error: 'Failed to parse error response' }));
+                    return res.status(finalResponse.status).json(errorData);
+                }
+                await pipeUpstreamToClient(finalResponse, res);
+                return;
+            }
+
+            // No tool call was made, return the answer as a single SSE
+            const answer = (message && message.content) || '';
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            sendSseDelta(res, answer);
+            sendSseDone(res);
+            return;
+        }
+
+        // No tools: original behavior
+        const response = await fetch(targetUrl, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json',
-            },
+            headers,
             body: JSON.stringify(chatBody),
         });
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
             console.error('Upstream API Error:', response.status, errorData);
-            logToFile('server', 'Upstream Chat Error', {
-                status: response.status,
-                url: `${baseUrl}/chat/completions`,
-                error: errorData
-            });
             return res.status(response.status).json(errorData);
         }
 
-        // Handle streaming
         if (chatBody.stream && response.body) {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                res.write(decoder.decode(value, { stream: true }));
-            }
-            return res.end();
+            await pipeUpstreamToClient(response, res);
+            return;
         }
 
         const data = await response.json();
         res.json(data);
     } catch (error) {
         console.error('Error in chat completion:', error.message);
-        res.status(500).json({ error: 'Failed to get chat completion' });
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to get chat completion' });
+        }
+    }
+});
+
+// DuckDuckGo web search
+router.get('/search', async (req, res) => {
+    try {
+        const q = req.query.q;
+        const limit = Math.min(Number(req.query.limit) || 10, 30);
+        if (!q || typeof q !== 'string') {
+            return res.status(400).json({ error: 'Missing q parameter' });
+        }
+        const results = await searchDuckDuckGo(q, limit);
+        res.json({ query: q, results });
+    } catch (e) {
+        console.error('DuckDuckGo search error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Tools API
+router.get('/tools', async (req, res) => {
+    try {
+        const config = await getConfig();
+        res.json({ tools: config.tools || [], searchEngine: config.searchEngine || 'auto' });
+    } catch (e) {
+        console.error('Tools read error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+router.post('/tools/:id', async (req, res) => {
+    try {
+        const config = await getConfig();
+        const tool = (config.tools || []).find(t => t.id === req.params.id);
+        if (!tool) return res.status(404).json({ error: 'Tool not found' });
+        if (typeof req.body.enabled === 'boolean') tool.enabled = req.body.enabled;
+        await saveConfig(config);
+        res.json({ tools: config.tools, searchEngine: config.searchEngine || 'auto' });
+    } catch (e) {
+        console.error('Tools update error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+router.post('/search-engine', async (req, res) => {
+    try {
+        const config = await getConfig();
+        const { engine } = req.body;
+        if (engine && ['auto', 'duckduckgo', 'bing', 'yahoo', 'startpage'].includes(engine)) {
+            config.searchEngine = engine;
+            await saveConfig(config);
+            setSearchEngine(engine);
+        }
+        res.json({ searchEngine: config.searchEngine || 'auto' });
+    } catch (e) {
+        console.error('Search engine update error:', e.message);
+        res.status(500).json({ error: e.message });
     }
 });
 

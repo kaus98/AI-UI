@@ -3,19 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>AI Chat</title>
     <!-- Segoe UI is a system font; no external import needed -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="styles.css?v=3">
-    <style>
-        .EasyMDEContainer { flex: 1; min-width: 0; }
-        .EasyMDEContainer .CodeMirror { height: auto !important; min-height: 0 !important; max-height: 120px !important; padding: 0 !important; }
-        .EasyMDEContainer .CodeMirror-scroll { min-height: 24px !important; max-height: 120px !important; padding: 0 !important; margin: 0 !important; }
-        .CodeMirror-sizer { min-height: 0 !important; padding: 0 !important; }
-        .input-area { padding: 0.25rem 1rem 0.5rem !important; }
-    </style>
+    <link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
     <!-- Onboarding / Setup -->
@@ -77,6 +73,14 @@
                     <button id="add-setup-endpoint-btn" class="primary-btn">Add Endpoint</button>
                 </div>
             </div>
+            <div class="form-group" style="margin-top:1rem;border-top:1px solid var(--border-color);padding-top:1rem">
+                <label>System Prompt</label>
+                <textarea id="setup-system-prompt" rows="3" placeholder="Optional default persona/instructions for this endpoint"></textarea>
+            </div>
+            <div class="form-group">
+                <label>Default Model ID</label>
+                <input type="text" id="setup-default-model" placeholder="Leave blank to load models list">
+            </div>
             <div id="setup-error" class="setup-error hidden"></div>
         </div>
     </div>
@@ -90,7 +94,19 @@
                     New Chat
                 </button>
             </div>
-            <div class="chat-list" id="chat-list"></div>
+            <div class="chat-list" id="chat-list">
+                <div class="search-bar" style="padding:0.5rem 1rem;">
+                    <input type="text" id="chat-search" placeholder="Search chats..." style="width:100%;padding:0.5rem;border-radius:6px;border:1px solid var(--border-color);background:var(--card-bg);color:var(--text-primary);">
+                </div>
+                <div class="folder-list" id="folder-list" style="padding:0 0.75rem 0.5rem;font-size:0.85rem;color:var(--text-secondary);">
+                    <span class="folder-pill active" data-folder="All" style="cursor:pointer;margin-right:0.5rem;">All</span>
+                    <span class="folder-pill" data-folder="General" style="cursor:pointer;margin-right:0.5rem;">General</span>
+                    <span class="folder-pill" data-folder="Work" style="cursor:pointer;margin-right:0.5rem;">Work</span>
+                    <span class="folder-pill" data-folder="Personal" style="cursor:pointer;margin-right:0.5rem;">Personal</span>
+                    <span class="folder-pill" data-folder="Archive" style="cursor:pointer;">Archive</span>
+                </div>
+                <div id="chat-items"></div>
+            </div>
         </aside>
         <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
@@ -105,10 +121,16 @@
                         <div class="endpoint-selector-wrapper">
                             <select id="endpoint-select" class="endpoint-select"></select>
                         </div>
+                        <select id="preset-select" class="endpoint-select" title="Agent preset" style="max-width:120px;margin-left:0.25rem;">
+                            <option value="">No Agent</option>
+                        </select>
                     </div>
                 </div>
 
                 <div class="controls">
+                    <button id="theme-toggle-btn" class="icon-btn" title="Toggle theme">
+                        <i class="fa-solid fa-sun"></i>
+                    </button>
                     <button id="settings-btn" class="icon-btn" title="Settings">
                         <i class="fa-solid fa-gear"></i>
                     </button>
@@ -137,6 +159,9 @@
                         <textarea id="user-input" placeholder="Type a message..."></textarea>
                         <button id="attach-btn" title="Attach Image">
                             <i class="fa-solid fa-paperclip"></i>
+                        </button>
+                        <button id="stop-btn" class="stop-btn" type="button" title="Stop generating" hidden>
+                            <i class="fa-solid fa-square"></i>
                         </button>
                         <button id="send-btn">
                             <i class="fa-solid fa-arrow-up"></i>
@@ -181,6 +206,26 @@
                         <label>API Key</label>
                         <input type="password" id="edit-key" placeholder="sk-...">
                     </div>
+                    <div class="form-group">
+                        <label>System Prompt</label>
+                        <textarea id="edit-system-prompt" rows="3" placeholder="Optional default persona/instructions for this endpoint"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Default Model ID</label>
+                        <input type="text" id="edit-default-model" placeholder="Leave blank to load models list">
+                    </div>
+                    <div class="form-group form-inline" style="display:flex; align-items:center; gap:0.5rem;">
+                        <input type="checkbox" id="edit-stream" checked>
+                        <label for="edit-stream" style="margin:0;">Enable streaming for this endpoint</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Input cost per 1M tokens</label>
+                        <input type="number" id="edit-input-cost" placeholder="0.00" step="0.01" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label>Output cost per 1M tokens</label>
+                        <input type="number" id="edit-output-cost" placeholder="0.00" step="0.01" min="0">
+                    </div>
                     <div id="edit-oauth-group" class="oauth-fields hidden">
                         <div class="form-group">
                             <label>Token URL</label>
@@ -205,9 +250,55 @@
                     </div>
                 </div>
 
+                <h3 style="margin-top:1.5rem">Agents / Presets</h3>
+                <div id="presets-list" class="endpoints-list"></div>
+                <button id="add-preset-btn" class="secondary-btn">+ Add Agent</button>
+                <div id="preset-form" class="endpoint-form hidden">
+                    <h4 id="preset-form-title">Add Agent</h4>
+                    <input type="hidden" id="preset-edit-id">
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="preset-name" placeholder="e.g. Python Tutor">
+                    </div>
+                    <div class="form-group">
+                        <label>Endpoint</label>
+                        <select id="preset-endpoint"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Model ID</label>
+                        <input type="text" id="preset-model" placeholder="Leave blank to use current model">
+                    </div>
+                    <div class="form-group">
+                        <label>System Prompt</label>
+                        <textarea id="preset-prompt" rows="3" placeholder="Instructions for this agent"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Tags <small style="opacity:0.6">comma-separated</small></label>
+                        <input type="text" id="preset-tags" placeholder="coding, help">
+                    </div>
+                    <div class="form-actions">
+                        <button id="cancel-preset-btn" class="ghost-btn">Cancel</button>
+                        <button id="save-preset-btn" class="primary-btn">Save</button>
+                    </div>
+                </div>
+
+                <h3 style="margin-top:1.5rem">Cloudflare Proxy</h3>
+                <div class="form-group">
+                    <label>Proxy Base URL</label>
+                    <input type="text" id="proxy-base-url" placeholder="https://aiui-proxy.YOUR_SUBDOMAIN.workers.dev">
+                </div>
+                <div class="form-actions" style="margin-top:0.5rem;">
+                    <button id="save-proxy-btn" class="primary-btn">Save Proxy URL</button>
+                </div>
+
+                <h3 style="margin-top:1.5rem">Chats</h3>
                 <div class="settings-actions">
+                    <button id="export-chats-btn" class="secondary-btn">Export Chats</button>
+                    <button id="import-chats-btn" class="secondary-btn">Import Chats</button>
+                    <input type="file" id="import-chats-input" accept="application/json" style="display:none">
                     <button id="export-config-btn" class="secondary-btn">Export Config</button>
                     <button id="clear-chats-btn" class="danger-btn">Clear Chats</button>
+                    <button id="clear-cache-btn" class="danger-btn">Clear All Caches</button>
                 </div>
             </div>
         </div>
@@ -216,6 +307,6 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=9"></script>
 </body>
 </html>

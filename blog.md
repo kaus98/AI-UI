@@ -64,7 +64,7 @@ All requests to the Unified API require your **Unified API Key**.
 - **Streaming Supported**: Yes (Server-Sent Events).
 - **Usage**:
     ```bash
-    curl http://localhost:3000/unified/v1/chat/completions \
+    curl http://localhost:3001/unified/v1/chat/completions \
       -H "Authorization: Bearer <YOUR_KEY>" \
       -H "Content-Type: application/json" \
       -d '{
@@ -110,7 +110,7 @@ Running AI-UI is straightforward for anyone with a basic Node.js environment.
     ```
 
 4.  **Access the UI**:
-    Open your browser and navigate to `http://localhost:3000`.
+    Open your browser and navigate to `http://localhost:3001`.
 
 ### Getting Started
 1.  Click the **Settings** (gear icon) in the bottom left.

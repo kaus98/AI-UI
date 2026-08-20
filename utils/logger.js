@@ -8,7 +8,10 @@ if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 
 function logToFile(type, message, details = null) {
     const timestamp = new Date().toISOString();
-    const logFile = path.join(LOGS_DIR, type === 'client' ? 'client_logs.txt' : 'server_logs.txt');
+    let fileName = 'server_logs.txt';
+    if (type === 'client') fileName = 'client_logs.txt';
+    if (type === 'request') fileName = 'requests.txt';
+    const logFile = path.join(LOGS_DIR, fileName);
 
     let logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
     if (details) {

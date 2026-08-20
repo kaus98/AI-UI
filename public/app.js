@@ -3,6 +3,8 @@ const refreshModelsBtn = document.getElementById('refresh-models-btn');
 const chatContainer = document.getElementById('chat-container');
 const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
+const stopBtn = document.getElementById('stop-btn');
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const chatListDiv = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
@@ -35,6 +37,11 @@ const editName = document.getElementById('edit-name');
 const editUrl = document.getElementById('edit-url');
 const editKey = document.getElementById('edit-key');
 const editAuthType = document.getElementById('edit-auth-type');
+const editDefaultModel = document.getElementById('edit-default-model');
+const editStream = document.getElementById('edit-stream');
+const editInputCost = document.getElementById('edit-input-cost');
+const editOutputCost = document.getElementById('edit-output-cost');
+const editSystemPrompt = document.getElementById('edit-system-prompt');
 const authApiKeyGroup = document.getElementById('auth-api-key');
 const authOauthGroup = document.getElementById('auth-oauth');
 const editTokenUrl = document.getElementById('edit-token-url');
@@ -42,19 +49,39 @@ const editClientId = document.getElementById('edit-client-id');
 const editClientSecret = document.getElementById('edit-client-secret');
 const editScope = document.getElementById('edit-scope');
 
+const presetSelect = document.getElementById('preset-select');
+const chatSearch = document.getElementById('chat-search');
+const folderList = document.getElementById('folder-list');
+const chatItems = document.getElementById('chat-items');
+const presetsList = document.getElementById('presets-list');
+const presetForm = document.getElementById('preset-form');
+const exportChatsBtn = document.getElementById('export-chats-btn');
+const importChatsBtn = document.getElementById('import-chats-btn');
+const importChatsInput = document.getElementById('import-chats-input');
+const addPresetBtn = document.getElementById('add-preset-btn');
+const cancelPresetBtn = document.getElementById('cancel-preset-btn');
+const savePresetBtn = document.getElementById('save-preset-btn');
+
 
 // ... (renderChatList update) ...
 
 function renderChatList() {
-    chatListDiv.innerHTML = '';
-    state.chats.forEach(chat => {
+    chatItems.innerHTML = '';
+    const q = searchQuery.toLowerCase();
+    const filtered = state.chats.filter(chat => {
+        const inFolder = currentFolder === 'All' || chat.folder === currentFolder || (currentFolder === DEFAULT_FOLDER && !chat.folder);
+        if (!q) return inFolder;
+        const hay = `${chat.title || ''} ${(chat.tags || []).join(' ')} ${chat.messages.map(m => getMessageText(m.content)).join(' ')}`.toLowerCase();
+        return inFolder && hay.includes(q);
+    }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.timestamp - a.timestamp);
+
+    filtered.forEach(chat => {
         const div = document.createElement('div');
         div.className = 'chat-item';
         if (chat.id === state.currentChatId) {
             div.classList.add('active');
         }
 
-        // Gather Metadata
         const endpoint = state.endpoints.find(e => e.id === chat.endpointId);
         const endpointName = endpoint ? endpoint.name : (chat.endpointId ? 'Unknown' : 'No Endpoint');
         const modelName = chat.modelId || 'No Model';
@@ -62,22 +89,37 @@ function renderChatList() {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
         });
 
-        // Structure: 
-        // [ Title         ] [Del]
-        // [ Meta Details  ]
         const contentDiv = document.createElement('div');
         contentDiv.className = 'chat-content';
 
         const titleDiv = document.createElement('div');
         titleDiv.className = 'chat-title';
-        titleDiv.textContent = chat.title;
+        titleDiv.textContent = chat.title || 'New Chat';
+
+        const tagsDiv = document.createElement('div');
+        tagsDiv.className = 'chat-item-tags';
+        if (chat.tags && chat.tags.length) {
+            chat.tags.slice(0, 4).forEach(tag => {
+                const span = document.createElement('span');
+                span.className = 'chat-tag';
+                span.textContent = tag;
+                tagsDiv.appendChild(span);
+            });
+        }
 
         const metaDiv = document.createElement('div');
         metaDiv.className = 'chat-meta';
-        metaDiv.textContent = `${endpointName} • ${modelName} • ${dateStr}`;
+        metaDiv.textContent = `${endpointName} • ${modelName} • ${chat.folder || DEFAULT_FOLDER} • ${dateStr}`;
 
         contentDiv.appendChild(titleDiv);
+        if (chat.tags && chat.tags.length) contentDiv.appendChild(tagsDiv);
         contentDiv.appendChild(metaDiv);
+
+        const pinBtn = document.createElement('button');
+        pinBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${chat.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2 4h4l-2 2 1 6-5 5-5-5 1-6-2-2h4z"></path></svg>`;
+        pinBtn.className = 'pin-chat-btn';
+        pinBtn.title = chat.pinned ? 'Unpin' : 'Pin';
+        pinBtn.onclick = (e) => { e.stopPropagation(); togglePinChat(chat.id); };
 
         const delBtn = document.createElement('button');
         delBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
@@ -86,8 +128,14 @@ function renderChatList() {
 
         div.onclick = () => setCurrentChat(chat.id);
         div.appendChild(contentDiv);
+        div.appendChild(pinBtn);
         div.appendChild(delBtn);
-        chatListDiv.appendChild(div);
+        chatItems.appendChild(div);
+    });
+
+    // Update folder pills UI
+    Array.from(folderList.children).forEach(pill => {
+        pill.classList.toggle('active', pill.dataset.folder === currentFolder);
     });
 }
 
@@ -99,17 +147,21 @@ function renderEndpointsList() {
         const item = document.createElement('div');
         item.className = 'endpoint-item';
         item.innerHTML = `
-            <div class="endpoint-info" style="display:flex; align-items:center; gap:0.5rem">
-                <div>
-                    <h4>${ep.name}</h4>
-                    <p>${ep.baseUrl}</p>
-                </div>
+            <div class="endpoint-info">
+                <h4></h4>
             </div>
             <div class="endpoint-actions">
-                <button onclick="editEndpoint('${ep.id}')">Edit</button>
-                <button onclick="deleteEndpoint('${ep.id}')" class="delete-btn">Delete</button>
+                <button class="edit-ep-btn icon-btn" title="Edit">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                </button>
+                <button class="delete-ep-btn icon-btn delete-btn" title="Delete">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                </button>
             </div>
         `;
+        item.querySelector('h4').textContent = ep.name;
+        item.querySelector('.edit-ep-btn').addEventListener('click', () => window.editEndpoint(ep.id));
+        item.querySelector('.delete-ep-btn').addEventListener('click', () => window.deleteEndpoint(ep.id));
         endpointsList.appendChild(item);
     });
 }
@@ -122,19 +174,24 @@ window.editEndpoint = (id) => {
     editId.value = ep.id;
     editName.value = ep.name;
     editUrl.value = ep.baseUrl;
-
+    editDefaultModel.value = ep.defaultModel || '';
+    editStream.checked = ep.stream !== false;
+    editInputCost.value = ep.inputCost != null ? ep.inputCost : '';
+    editOutputCost.value = ep.outputCost != null ? ep.outputCost : '';
+    editSystemPrompt.value = ep.systemPrompt || '';
 
     // Auth Fields
     editAuthType.value = ep.authType || 'api-key';
     toggleAuthFields();
 
     editKey.value = '';
-    editKey.placeholder = 'Leave blank to keep current key';
+    editKey.placeholder = ep.hasKey ? 'Leave blank to keep current key' : 'sk-...';
 
     // OAuth Fields
     editTokenUrl.value = ep.tokenUrl || '';
     editClientId.value = ep.clientId || '';
-    editClientSecret.value = ''; // Don't show secret
+    editClientSecret.value = '';
+    editClientSecret.placeholder = ep.hasSecret ? 'Leave blank to keep current secret' : 'Client Secret';
     editScope.value = ep.scope || '';
 
     // Attempt to guess preset
@@ -157,14 +214,41 @@ let state = {
     currentChatId: null,
     isGenerating: false,
     endpoints: [],
-    currentEndpointId: null
+    currentEndpointId: null,
+    presets: [],
+    currentPresetId: null,
+    proxyBaseUrl: '',
+    tools: [],
+    searchEngine: 'auto'
 };
+
+const DEFAULT_FOLDER = 'General';
+let currentFolder = 'All';
+let searchQuery = '';
+
+// --- Proxy / API base helpers ---
+function getApiUrl(path) {
+    const base = (state.proxyBaseUrl || '').replace(/\/+$/, '');
+    return base ? `${base}${path}` : path;
+}
+
+async function apiFetch(path, options = {}) {
+    const proxyUrl = getApiUrl(path);
+    if (proxyUrl === path) return fetch(path, options);
+    try {
+        const res = await fetch(proxyUrl, options);
+        if (res.status < 500) return res;
+    } catch (e) {
+        // Proxy unreachable or CORS blocked; fall through to direct
+    }
+    return fetch(path, options);
+}
 
 // --- Logging Helper ---
 async function logToServer(level, message, details = null) {
     try {
         // Don't await strictly to avoid blocking UI
-        fetch('/api/logs', {
+        fetch(getApiUrl('/api/logs'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ level, message, details })
@@ -178,13 +262,15 @@ async function logToServer(level, message, details = null) {
 
 async function fetchEndpoints() {
     try {
-        const res = await fetch('/api/endpoints');
+        const res = await apiFetch('/api/endpoints');
         if (!res.ok) throw new Error('Failed to load settings');
         const data = await res.json();
-        state.endpoints = data.endpoints;
-        state.currentEndpointId = data.currentEndpointId;
+        state.endpoints = data.endpoints.map(e => ({ ...e, id: String(e.id), authType: e.authType || 'api-key', systemPrompt: e.systemPrompt || '', defaultModel: e.defaultModel || '', stream: e.stream !== false, inputCost: e.inputCost || 0, outputCost: e.outputCost || 0, tokenUrl: e.tokenUrl || '', clientId: e.clientId || '', hasSecret: !!e.hasSecret, scope: e.scope || '' }));
+        state.currentEndpointId = data.currentEndpointId != null ? String(data.currentEndpointId) : null;
         renderEndpointSelect();
         renderEndpointsList();
+        renderPresetSelect();
+        renderPresetEndpointOptions();
     } catch (e) {
         console.error('Failed to fetch endpoints', e);
         showError('Failed to load endpoints: ' + e.message);
@@ -192,13 +278,137 @@ async function fetchEndpoints() {
     }
 }
 
-async function fetchModels() {
+async function fetchTools() {
     try {
-        const url = state.currentEndpointId
+        const res = await apiFetch('/api/tools');
+        if (!res.ok) throw new Error('Failed to load tools');
+        const data = await res.json();
+        state.tools = data.tools.map(t => ({ ...t, id: String(t.id), enabled: t.enabled !== false }));
+        state.searchEngine = data.searchEngine || 'auto';
+    } catch (e) {
+        console.error('Failed to fetch tools', e);
+        state.tools = [];
+    }
+}
+
+async function toggleTool(id, enabled) {
+    try {
+        const res = await apiFetch('/api/tools/' + encodeURIComponent(id), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+        if (!res.ok) throw new Error('Failed to update tool');
+        const data = await res.json();
+        state.tools = data.tools.map(t => ({ ...t, id: String(t.id), enabled: t.enabled !== false }));
+        renderTools();
+    } catch (e) {
+        console.error('Failed to toggle tool', e);
+        showError('Failed to update tool: ' + e.message);
+    }
+}
+
+function getToolIcon(id) {
+    const color = 'currentColor';
+    switch (id) {
+        case 'web_search':
+            return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="M21 21l-4.35-4.35"></path></svg>`;
+        case 'url_fetch':
+            return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`;
+        case 'wikipedia':
+            return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${color}" stroke="none" aria-hidden="true"><path d="M4 4l4 16h2l3-10 3 10h2l4-16h-2l-3 12-3-12h-2l-3 12-3-12z"></path></svg>`;
+        default:
+            return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
+    }
+}
+
+function renderTools() {
+    const main = document.getElementById('tools-bar');
+    const settings = document.getElementById('settings-tools-list');
+    const searchSelect = document.getElementById('search-engine-select');
+    if (searchSelect) searchSelect.value = state.searchEngine || 'auto';
+    [main, settings].forEach(container => {
+        if (!container) return;
+        container.innerHTML = '';
+        if (!state.tools.length) {
+            container.innerHTML = '<span class="tool-empty">No tools available</span>';
+            return;
+        }
+        if (container.id === 'tools-bar') {
+            state.tools.forEach(tool => {
+                const label = document.createElement('label');
+                label.className = 'tool-toggle';
+                label.title = tool.description || '';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = tool.enabled;
+                cb.onchange = () => toggleTool(tool.id, cb.checked);
+                cb.setAttribute('aria-label', tool.name);
+                const span = document.createElement('span');
+                span.innerHTML = getToolIcon(tool.id);
+                span.setAttribute('aria-hidden', 'true');
+                label.appendChild(cb);
+                label.appendChild(span);
+                container.appendChild(label);
+            });
+            return;
+        }
+
+        // Settings panel: OpenWebUI-style rows with switch
+        state.tools.forEach(tool => {
+            const row = document.createElement('fieldset');
+            row.className = 'tool-row';
+
+            const info = document.createElement('div');
+            info.className = 'tool-row-info';
+            const icon = document.createElement('span');
+            icon.className = 'tool-row-icon';
+            icon.innerHTML = getToolIcon(tool.id);
+            icon.setAttribute('aria-hidden', 'true');
+            const text = document.createElement('div');
+            text.className = 'tool-row-text';
+            const name = document.createElement('span');
+            name.className = 'tool-row-name';
+            name.textContent = tool.name;
+            text.appendChild(name);
+            info.appendChild(icon);
+            info.appendChild(text);
+
+            const switchLabel = document.createElement('label');
+            switchLabel.className = 'switch';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.role = 'switch';
+            cb.setAttribute('role', 'switch');
+            cb.checked = tool.enabled;
+            cb.setAttribute('aria-checked', String(tool.enabled));
+            cb.setAttribute('aria-label', `Enable ${tool.name}`);
+            cb.onchange = () => toggleTool(tool.id, cb.checked);
+            const slider = document.createElement('span');
+            slider.className = 'switch-slider';
+            switchLabel.appendChild(cb);
+            switchLabel.appendChild(slider);
+
+            row.appendChild(info);
+            row.appendChild(switchLabel);
+            container.appendChild(row);
+        });
+    });
+    // Set search engine select in Search tab
+    if (searchSelect) searchSelect.value = state.searchEngine || 'auto';
+}
+
+async function fetchModels(forceRefresh = false) {
+    // Always wipe the dropdown before a fetch so stale models are never shown
+    modelSelect.innerHTML = '';
+
+    try {
+        let url = state.currentEndpointId
             ? `/api/models?endpointId=${state.currentEndpointId}`
             : '/api/models';
+        if (forceRefresh) url += (url.includes('?') ? '&' : '?') + 'refresh=1';
 
-        const response = await fetch(url);
+        const response = await apiFetch(url);
 
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
@@ -209,7 +419,7 @@ async function fetchModels() {
         logToServer('INFO', 'Fetched Models', { count: data.data ? data.data.length : 0 });
 
         modelSelect.innerHTML = '';
-        if (data.data && Array.isArray(data.data)) {
+        if (data.data && Array.isArray(data.data) && data.data.length > 0) {
             data.data.forEach(model => {
                 const option = document.createElement('option');
                 option.value = model.id;
@@ -233,7 +443,20 @@ async function fetchModels() {
                 option.dataset.vision = hasVision;
                 modelSelect.appendChild(option);
             });
-            if (data.data.length > 0) modelSelect.value = data.data[0].id;
+            // Choose the best initial model value
+            const ep = state.endpoints.find(e => e.id === state.currentEndpointId);
+            const chat = getCurrentChat();
+            const preset = state.currentPresetId ? state.presets.find(p => p.id === state.currentPresetId) : null;
+            let selected = data.data[0].id;
+            const options = Array.from(modelSelect.options).map(o => o.value);
+            if (chat && chat.modelId && options.includes(chat.modelId)) {
+                selected = chat.modelId;
+            } else if (preset && preset.modelId && options.includes(preset.modelId)) {
+                selected = preset.modelId;
+            } else if (ep && ep.defaultModel && options.includes(ep.defaultModel)) {
+                selected = ep.defaultModel;
+            }
+            modelSelect.value = selected;
 
             statusIndicator.style.backgroundColor = '#0e7a0d';
             statusIndicator.title = 'Connected';
@@ -254,7 +477,7 @@ async function fetchModels() {
 
 async function saveChatState() {
     try {
-        await fetch('/api/history', {
+        await apiFetch('/api/history', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(state.chats)
@@ -267,10 +490,14 @@ async function saveChatState() {
 
 async function loadChatState() {
     try {
-        const response = await fetch('/api/history');
+        const response = await apiFetch('/api/history');
         if (response.ok) {
             const data = await response.json();
             state.chats = Array.isArray(data) ? data : [];
+            state.chats.forEach(c => {
+                if (c.endpointId != null) c.endpointId = String(c.endpointId);
+                if (c.modelId != null) c.modelId = String(c.modelId);
+            });
         } else {
             state.chats = [];
         }
@@ -281,12 +508,41 @@ async function loadChatState() {
 
 // --- Chat Logic ---
 
-async function createNewChat() {
+async function createNewChat(presetId = null) {
+    presetId = presetId || state.currentPresetId || null;
     const id = Date.now().toString();
+    let endpointId = state.currentEndpointId;
+    let modelId = '';
+    let systemPrompt = '';
+    let tags = [];
+    let folder = DEFAULT_FOLDER;
+
+    if (presetId) {
+        const preset = state.presets.find(p => p.id === presetId);
+        if (preset) {
+            if (preset.endpointId && state.endpoints.find(e => e.id === preset.endpointId)) endpointId = preset.endpointId;
+            modelId = preset.modelId || '';
+            systemPrompt = preset.systemPrompt || '';
+            tags = (preset.tags || []).slice();
+        }
+    }
+
+    const ep = state.endpoints.find(e => e.id === endpointId);
+    if (ep) {
+        if (!modelId) modelId = ep.defaultModel || '';
+        if (!systemPrompt && ep.systemPrompt) systemPrompt = ep.systemPrompt;
+    }
+
     const newChat = {
-        id: id,
+        id,
         title: 'New Chat',
+        folder,
+        tags,
+        endpointId,
+        modelId,
+        systemPrompt,
         messages: [],
+        pinned: false,
         timestamp: Date.now()
     };
     state.chats.unshift(newChat);
@@ -298,40 +554,44 @@ function getCurrentChat() {
     return state.chats.find(c => c.id === state.currentChatId);
 }
 
-function setCurrentChat(id) {
+async function setCurrentChat(id) {
     state.currentChatId = id;
     const chat = getCurrentChat();
 
-    // UI Locking Logic
-    if (chat) {
-        // Enforce Model Locking
-        if (chat.modelId) {
-            modelSelect.value = chat.modelId;
-            modelSelect.disabled = true;
-        } else {
-            // New or legacy chat without lock
-            modelSelect.disabled = false;
-        }
+    // Clear any staged draft images when switching chats
+    draftImages = [];
+    renderImagePreviews();
 
-        // Enforce Endpoint Context
-        if (chat.endpointId) {
+    // Restore endpoint/model from chat/preset when no active messages yet
+    if (chat) {
+        if (chat.endpointId && state.endpoints.find(e => e.id === chat.endpointId)) {
             if (chat.endpointId !== state.currentEndpointId) {
-                // Mismatch: Disable Input, Enable Selector (to switch back)
-                if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', true);
-                sendBtn.disabled = true;
-                endpointSelect.disabled = false;
-            } else {
-                // Match: Enable Input, Disable Selector (Lock context)
-                if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', false);
-                sendBtn.disabled = false; // Let logic decide
-                endpointSelect.disabled = true;
+                state.currentEndpointId = chat.endpointId;
+                endpointSelect.value = chat.endpointId;
+                await fetchModels(true);
             }
-        } else {
-            // New/UnBound Chat: Enable everything
-            if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', false);
-            sendBtn.disabled = false;
-            endpointSelect.disabled = false;
         }
+        if (chat.modelId && !modelSelect.querySelector(`option[value="${chat.modelId}"]`)) {
+            await fetchModels(true);
+        }
+        if (chat.modelId) {
+            if (modelSelect.querySelector(`option[value="${chat.modelId}"]`)) {
+                modelSelect.value = chat.modelId;
+            }
+        }
+    }
+
+    // UI Locking Logic
+    if (chat && chat.messages.length > 0) {
+        modelSelect.disabled = true;
+        endpointSelect.disabled = true;
+        sendBtn.disabled = false;
+        if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', false);
+    } else {
+        modelSelect.disabled = false;
+        endpointSelect.disabled = false;
+        sendBtn.disabled = false;
+        if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', false);
     }
 
     renderChatList();
@@ -340,7 +600,7 @@ function setCurrentChat(id) {
 }
 
 function updateChatTitle(chat, firstMessage) {
-    if (chat.messages.length === 1) {
+    if (!chat.title || chat.title === 'New Chat') {
         chat.title = firstMessage.length > 30 ? firstMessage.substring(0, 30) + '...' : firstMessage;
         renderChatList();
     }
@@ -362,46 +622,60 @@ window.deleteChat = async (id) => {
     // Reset selection if active chat deleted
     if (state.currentChatId === id) {
         if (state.chats.length > 0) {
-            setCurrentChat(state.chats[0].id);
+            await setCurrentChat(state.chats[0].id);
         } else {
             const newId = await createNewChat();
-            setCurrentChat(newId);
+            await setCurrentChat(newId);
         }
     } else {
         renderChatList();
     }
 };
 
+window.togglePinChat = async (id) => {
+    const chat = state.chats.find(c => c.id === id);
+    if (!chat) return;
+    chat.pinned = !chat.pinned;
+    await saveChatState();
+    renderChatList();
+};
+
 function renderMessages() {
     chatContainer.innerHTML = '';
     const chat = getCurrentChat();
     if (!chat || chat.messages.length === 0) {
+        const sysPrompt = chat
+            ? (chat.systemPromptDraft !== undefined ? chat.systemPromptDraft : (chat.systemPrompt || ''))
+            : '';
+        const temperature = chat
+            ? (chat.temperatureDraft !== undefined ? chat.temperatureDraft : (chat.temperature !== undefined ? chat.temperature : '0.7'))
+            : '0.7';
         chatContainer.innerHTML = `
             <div class="welcome-message">
                 <h2>Welcome</h2>
                 <p>Select a model and start chatting.</p>
-                
+
                 <!-- System Prompt -->
                 <div class="config-section" style="margin-top: 20px; max-width: 600px; margin-left: auto; margin-right: auto; text-align: left;">
                     <label style="display:block; margin-bottom: 8px; font-weight: 500;">System Prompt</label>
-                    <textarea 
-                        id="system-prompt-input" 
-                        class="system-prompt-input" 
+                    <textarea
+                        id="system-prompt-input"
+                        class="system-prompt-input"
                         placeholder="Enter the system prompt text..."
                         style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-primary); min-height: 80px; resize: vertical;"
-                    >${chat && chat.systemPromptDraft ? chat.systemPromptDraft : ''}</textarea>
+                    >${escapeHtml(String(sysPrompt))}</textarea>
 
                     <!-- Temperature -->
                     <div style="margin-top: 20px;">
                         <label style="display:flex; justify-content:space-between; margin-bottom: 8px; font-weight: 500;">
                             <span>Temperature</span>
-                            <span id="temp-display">${chat && chat.temperatureDraft !== undefined ? chat.temperatureDraft : '0.7'}</span>
+                            <span id="temp-display">${escapeHtml(String(temperature))}</span>
                         </label>
-                        <input 
-                            type="range" 
-                            id="temperature-input" 
-                            min="0" max="2" step="0.1" 
-                            value="${chat && chat.temperatureDraft !== undefined ? chat.temperatureDraft : '0.7'}"
+                        <input
+                            type="range"
+                            id="temperature-input"
+                            min="0" max="2" step="0.1"
+                            value="${escapeHtml(String(temperature))}"
                             style="width: 100%; cursor: pointer;"
                         >
                         <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 5px;">
@@ -432,11 +706,40 @@ function renderMessages() {
         }
         return;
     }
-    chat.messages.forEach(msg => appendMessageDiv(msg.role === 'user' ? 'User' : 'AI', msg.content, msg.role === 'user' ? 'user' : 'ai', msg.html));
+    chat.messages.forEach((msg, idx) => {
+        if (msg.role === 'system') return; // Don't render system prompts as bubbles
+        // Always render from content; ignore any persisted html to avoid XSS from imported chats
+        appendMessageDiv(msg.role === 'user' ? 'User' : 'AI', msg.content, msg.role === 'user' ? 'user' : 'ai', null, chat, idx, msg.createdAt);
+    });
     scrollToBottom();
 }
 
+// --- Theme management
+function applyTheme(theme) {
+    let resolved = theme;
+    if (theme === 'system' || !theme) {
+        resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', resolved);
+    localStorage.setItem('aiui_theme', theme || 'system');
+}
 
+function cycleTheme() {
+    const current = localStorage.getItem('aiui_theme') || 'system';
+    const next = current === 'light' ? 'dark' : (current === 'dark' ? 'system' : 'light');
+    applyTheme(next);
+    if (themeToggleBtn) themeToggleBtn.title = `Theme: ${next}`;
+}
+
+function initTheme() {
+    const saved = localStorage.getItem('aiui_theme') || 'system';
+    applyTheme(saved);
+    if (themeToggleBtn) themeToggleBtn.title = `Theme: ${saved}`;
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        const savedNow = localStorage.getItem('aiui_theme') || 'system';
+        if (savedNow === 'system') applyTheme('system');
+    });
+}
 
 // --- Markdown Configuration ---
 // Configure Marked
@@ -470,13 +773,18 @@ const tokenizer = {
     html(src) { return false; }
 };
 
-marked.use({ renderer, tokenizer, breaks: true, gfm: true });
+try {
+    marked.use({ renderer, tokenizer, breaks: true, gfm: true });
+} catch (e) {
+    console.error('Failed to configure marked', e);
+}
 
-function appendMessageDiv(role, content, type, preRendered = null) {
+function appendMessageDiv(role, content, type, preRendered = null, chat = null, msgIndex = -1, timestamp = null) {
     const welcome = document.querySelector('.welcome-message');
     if (welcome) welcome.remove();
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${type}`;
+    if (timestamp) msgDiv.dataset.timestamp = timestamp;
 
     let htmlContent = '';
 
@@ -496,7 +804,15 @@ function appendMessageDiv(role, content, type, preRendered = null) {
         htmlContent = marked.parse(content || '');
     }
 
-    msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-actions"><button class="msg-action-btn msg-copy-btn" title="Copy"><i class="fa-regular fa-copy"></i></button><button class="msg-action-btn msg-collapse-btn" title="Collapse"><i class="fa-solid fa-chevron-up"></i></button></div><div class="msg-body">${htmlContent}</div></div>`;
+    const isUser = type === 'user';
+    const extraActions = isUser
+        ? `<button class="msg-action-btn msg-edit-btn" title="Edit"><i class="fa-solid fa-pen"></i></button>`
+        : `<button class="msg-action-btn msg-regenerate-btn" title="Regenerate"><i class="fa-solid fa-rotate-right"></i></button>`;
+    const timeHtml = timestamp ? `<div class="message-time">${formatTimestamp(timestamp)}</div>` : '';
+    const usage = (chat && msgIndex >= 0 && chat.messages[msgIndex]?.usage) ? chat.messages[msgIndex].usage : null;
+    const usageHtml = (usage && !isUser) ? `<div class="msg-usage">${usage.totalTokens.toLocaleString()} tokens · $${usage.totalCost.toFixed(4)}</div>` : '';
+
+    msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-actions">${extraActions}<button class="msg-action-btn msg-copy-btn" title="Copy"><i class="fa-regular fa-copy"></i></button><button class="msg-action-btn msg-collapse-btn" title="Collapse"><i class="fa-solid fa-chevron-up"></i></button></div><div class="msg-body">${htmlContent}</div>${timeHtml}${usageHtml}</div>`;
 
     // Wire up copy button
     const copyBtn = msgDiv.querySelector('.msg-copy-btn');
@@ -523,6 +839,16 @@ function appendMessageDiv(role, content, type, preRendered = null) {
             ? '<i class="fa-solid fa-chevron-down"></i>'
             : '<i class="fa-solid fa-chevron-up"></i>';
     });
+
+    // Wire up edit user message
+    if (isUser && chat && msgIndex >= 0) {
+        msgDiv.querySelector('.msg-edit-btn').addEventListener('click', () => editUserMessage(chat, msgIndex, msgDiv));
+    }
+
+    // Wire up regenerate assistant message
+    if (!isUser && chat && msgIndex >= 0) {
+        msgDiv.querySelector('.msg-regenerate-btn').addEventListener('click', () => regenerateAssistantMessage(chat, msgIndex, msgDiv));
+    }
 
     chatContainer.appendChild(msgDiv);
     return msgDiv;
@@ -555,7 +881,7 @@ window.deleteEndpoint = async (id) => {
     try {
         if (!confirm('Delete this endpoint?')) return;
         logToServer('INFO', 'Deleting Endpoint', { id });
-        const res = await fetch(`/api/endpoints/${id}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/endpoints/${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Failed to delete');
         await fetchEndpoints();
     } catch (e) {
@@ -642,13 +968,18 @@ async function saveEndpoint() {
             baseUrl: editUrl.value,
             apiKey: editKey.value || null,
             authType: editAuthType.value,
+            systemPrompt: editSystemPrompt.value,
+            defaultModel: editDefaultModel.value,
+            stream: editStream.checked,
+            inputCost: editInputCost.value,
+            outputCost: editOutputCost.value,
             tokenUrl: editTokenUrl.value,
             clientId: editClientId.value,
             clientSecret: editClientSecret.value || null,
             scope: editScope.value
         };
 
-        const res = await fetch('/api/endpoints', {
+        const res = await apiFetch('/api/endpoints', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
@@ -660,6 +991,16 @@ async function saveEndpoint() {
         endpointForm.classList.add('hidden');
         addEndpointBtn.classList.remove('hidden');
         await fetchEndpoints();
+        if (state.currentEndpointId) await fetchModels(true);
+
+        const chat = getCurrentChat();
+        if (chat && chat.messages.length === 0 && state.currentEndpointId && chat.endpointId !== state.currentEndpointId) {
+            chat.endpointId = state.currentEndpointId;
+            chat.modelId = null;
+            await saveChatState();
+        }
+
+        if (state.currentChatId) await setCurrentChat(state.currentChatId);
     } catch (e) {
         showError('Save failed: ' + e.message);
         logToServer('ERROR', 'Save endpoint failed', e.message);
@@ -669,11 +1010,22 @@ async function saveEndpoint() {
 // --- Interaction ---
 
 async function init() {
+    initTheme();
+    loadPresets();
+    try {
+        state.proxyBaseUrl = localStorage.getItem('aiui_proxy_base') || '';
+    } catch (e) {}
     await fetchEndpoints(); // Load endpoints first
+    await fetchTools();     // Load tools
+    renderTools();
     await loadChatState();  // Load history
 
     if (state.currentEndpointId) {
-        await fetchModels();
+        await fetchModels(true);
+    }
+
+    if (state.currentPresetId) {
+        applyPreset(state.currentPresetId);
     }
 
     if (state.chats.length === 0) {
@@ -685,12 +1037,359 @@ async function init() {
 
     renderChatList();
     renderMessages();
-    setCurrentChat(state.currentChatId); // Enforce UI state on init
+    await setCurrentChat(state.currentChatId);
+}
+
+function parseSseLine(line) {
+    const s = line.trim();
+    if (!s || s === 'data: [DONE]') return null;
+    if (s.startsWith('data: ')) {
+        try { return JSON.parse(s.slice(6)); } catch { return null; }
+    }
+    return null;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatTimestamp(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+        return '';
+    }
+}
+
+function estimateTokens(text) {
+    return Math.ceil((typeof text === 'string' ? text : getMessageText(text)).length / 4);
+}
+
+function calculateUsageCost(usage, endpoint, messagesBefore, outputText) {
+    let promptTokens = 0;
+    let completionTokens = 0;
+    if (usage && typeof usage === 'object') {
+        promptTokens = usage.prompt_tokens || 0;
+        completionTokens = usage.completion_tokens || 0;
+    } else {
+        promptTokens = (messagesBefore || []).reduce((sum, m) => sum + estimateTokens(m.content), 0);
+        completionTokens = estimateTokens(outputText);
+    }
+    const totalTokens = promptTokens + completionTokens;
+    const inputCost = ((endpoint && endpoint.inputCost) || 0) * promptTokens / 1e6;
+    const outputCost = ((endpoint && endpoint.outputCost) || 0) * completionTokens / 1e6;
+    const totalCost = inputCost + outputCost;
+    return { promptTokens, completionTokens, totalTokens, totalCost };
+}
+
+function getApiError(err, status) {
+    let msg = `Error ${status}`;
+    if (err.error) {
+        if (typeof err.error === 'string') msg = err.error;
+        else if (typeof err.error === 'object') {
+            if (err.error.message) msg = err.error.message;
+            else if (err.error.detail) msg = err.error.detail;
+            else msg = JSON.stringify(err.error);
+        }
+    } else if (err.detail) {
+        msg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
+    } else if (err.message) {
+        msg = err.message;
+    }
+    return msg;
+}
+
+function getMessageText(content) {
+    if (!content) return '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content.map(c => (c.type === 'text' ? c.text : (c.image_url?.url ? '[image]' : ''))).join(' ');
+    }
+    return String(content);
+}
+
+function editUserMessage(chat, msgIndex, msgDiv) {
+    const body = msgDiv.querySelector('.msg-body');
+    const original = getMessageText(chat.messages[msgIndex].content);
+    body.innerHTML = '';
+
+    const ta = document.createElement('textarea');
+    ta.className = 'edit-textarea';
+    ta.style.cssText = 'width:100%;min-height:60px;padding:8px;border-radius:6px;border:1px solid var(--border-color);background:var(--card-bg);color:var(--text-primary);resize:vertical;';
+    ta.value = original;
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.5rem;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ghost-btn cancel-edit';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => renderMessages());
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary-btn save-edit';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', async () => {
+        const newText = ta.value.trim();
+        if (!newText) return;
+        chat.messages[msgIndex].content = newText;
+        chat.messages.splice(msgIndex + 1);
+        await saveChatState();
+        renderMessages();
+    });
+
+    btnRow.append(cancelBtn, saveBtn);
+    body.append(ta, btnRow);
+    ta.focus();
+}
+
+async function regenerateAssistantMessage(chat, msgIndex, msgDiv) {
+    if (state.isGenerating) return;
+    // Truncate messages at the user message preceding this assistant
+    let cutIndex = msgIndex;
+    for (let i = msgIndex - 1; i >= 0; i--) {
+        if (chat.messages[i].role === 'user') { cutIndex = i + 1; break; }
+    }
+    chat.messages.splice(cutIndex);
+    // Allow switching endpoint/model before regenerating
+    chat.endpointId = state.currentEndpointId;
+    chat.modelId = modelSelect.value;
+    await saveChatState();
+    renderMessages();
+    await generateAssistantResponse(chat);
+}
+
+async function generateAssistantResponse(chat) {
+    state.isGenerating = true;
+    sendBtn.disabled = true;
+    statusIndicator.style.backgroundColor = '#f7630c';
+    const assistantCreatedAt = new Date().toISOString();
+    const aiMsgDiv = appendMessageDiv('AI', '', 'ai', null, null, -1, assistantCreatedAt);
+    const aiBodyDiv = aiMsgDiv.querySelector('.msg-body');
+    aiBodyDiv.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+    scrollToBottom();
+
+    let answerBuffer = '';
+    let reasoningBuffer = '';
+    let rawText = '';
+    let hasReceivedData = false;
+    let ep = null;
+    let usage = null;
+    let reasoningEl = null;
+    let answerEl = null;
+    let chunkCount = 0;
+    let deltaCount = 0;
+    let streamStart = performance.now();
+
+    function ensureStreamingContainer() {
+        if (hasReceivedData) return;
+        aiBodyDiv.innerHTML = '';
+
+        // Reasoning / thinking panel
+        reasoningEl = document.createElement('details');
+        reasoningEl.className = 'reasoning-content';
+        reasoningEl.open = false;
+        reasoningEl.style.cssText = 'margin-bottom:0.75rem;color:var(--text-secondary);font-size:0.9em;font-style:italic;border-left:2px solid var(--border-color);padding-left:0.75rem;';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Thinking';
+        summary.style.cssText = 'cursor:pointer;font-weight:500;color:var(--text-secondary);';
+        reasoningEl.appendChild(summary);
+        const reasoningBody = document.createElement('div');
+        reasoningBody.className = 'reasoning-body';
+        reasoningBody.style.whiteSpace = 'pre-wrap';
+        reasoningEl.appendChild(reasoningBody);
+        aiBodyDiv.appendChild(reasoningEl);
+
+        // Answer panel
+        answerEl = document.createElement('div');
+        answerEl.className = 'answer-content';
+        answerEl.style.whiteSpace = 'pre-wrap';
+        aiBodyDiv.appendChild(answerEl);
+
+        hasReceivedData = true;
+    }
+
+    function estimateTokens(text) {
+        return Math.ceil(text.length / 4);
+    }
+
+    function appendReasoning(text) {
+        ensureStreamingContainer();
+        reasoningBuffer += text;
+        const body = reasoningEl.querySelector('.reasoning-body');
+        if (body) {
+            body.textContent = reasoningBuffer;
+            const summary = reasoningEl.querySelector('summary');
+            if (summary) summary.textContent = `Thinking (${estimateTokens(reasoningBuffer)} tokens)`;
+            scrollToBottom();
+        }
+    }
+
+    function appendAnswer(text) {
+        ensureStreamingContainer();
+        answerBuffer += text;
+        if (answerEl) {
+            answerEl.textContent = answerBuffer;
+            scrollToBottom();
+        }
+    }
+
+    function finalizeDisplay(usageData = null) {
+        const finalContent = answerBuffer || reasoningBuffer || '';
+        if (!finalContent) {
+            aiMsgDiv.remove();
+            return;
+        }
+        aiBodyDiv.innerHTML = marked.parse(finalContent);
+
+        const assistantIndex = chat.messages.length;
+        const usage = calculateUsageCost(usageData, ep, chat.messages, finalContent);
+        const msg = { role: 'assistant', content: finalContent, createdAt: assistantCreatedAt, usage };
+        chat.messages.push(msg);
+
+        const usageFooter = document.createElement('div');
+        usageFooter.className = 'msg-usage';
+        usageFooter.textContent = `${usage.totalTokens.toLocaleString()} tokens · $${usage.totalCost.toFixed(4)}`;
+        const contentDiv = aiMsgDiv.querySelector('.message-content');
+        if (contentDiv) contentDiv.appendChild(usageFooter);
+
+        if (chat) {
+            const regenerateBtn = aiMsgDiv.querySelector('.msg-regenerate-btn');
+            if (regenerateBtn) regenerateBtn.addEventListener('click', () => regenerateAssistantMessage(chat, assistantIndex, aiMsgDiv));
+        }
+    }
+
+    try {
+        ep = state.endpoints.find(e => e.id === (chat.endpointId || state.currentEndpointId));
+        const useStream = ep ? ep.stream !== false : true;
+        const activeTools = state.tools.filter(t => t.enabled).map(t => t.id);
+        const payload = {
+            endpointId: chat.endpointId || state.currentEndpointId,
+            model: chat.modelId || modelSelect.value,
+            messages: chat.messages,
+            temperature: chat.temperature || 0.7,
+            stream: useStream,
+            activeTools
+        };
+        logToServer('INFO', 'Sending Message', { model: payload.model, endpointId: payload.endpointId, stream: useStream });
+
+        const controller = new AbortController();
+        if (stopBtn) {
+            stopBtn.hidden = false;
+            sendBtn.hidden = true;
+            stopBtn.addEventListener('click', () => controller.abort(), { once: true });
+        }
+
+        const response = await apiFetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(getApiError(err, response.status));
+        }
+
+        if (!useStream) {
+            const data = await response.json();
+            const message = data.choices?.[0]?.message || {};
+            answerBuffer = message.content || '';
+            reasoningBuffer = message.reasoning_content || message.reasoning || '';
+            usage = data.usage || null;
+            finalizeDisplay(usage);
+            await saveChatState();
+            statusIndicator.style.backgroundColor = '#0e7a0d';
+            statusIndicator.title = 'Connected';
+            return;
+        }
+
+        if (!response.body) {
+            throw new Error('Streaming not supported by this browser or endpoint');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunkCount++;
+            const decoded = decoder.decode(value, { stream: true });
+            pending += decoded;
+            rawText += decoded;
+            const lines = pending.split('\n');
+            pending = lines.pop();
+
+            for (const line of lines) {
+                const chunk = parseSseLine(line);
+                if (chunk) {
+                    if (chunk.usage) usage = chunk.usage;
+                    const delta = chunk.choices?.[0]?.delta || {};
+                    const contentDelta = delta.content || '';
+                    const reasoningDelta = delta.reasoning_content || '';
+
+                    if (reasoningDelta) {
+                        appendReasoning(reasoningDelta);
+                        deltaCount++;
+                    }
+                    if (contentDelta) {
+                        appendAnswer(contentDelta);
+                        deltaCount++;
+                    }
+                }
+            }
+
+            // Yield to the browser's main thread so the UI can paint
+            if (chunkCount % 5 === 0) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+
+        logToServer('DEBUG', 'Stream done', { chunkCount, deltaCount, elapsedMs: Math.round(performance.now() - streamStart), answerLen: answerBuffer.length, reasoningLen: reasoningBuffer.length });
+
+        // Apply markdown formatting and persist message
+        finalizeDisplay(usage);
+        await saveChatState();
+        logToServer('INFO', 'Message Received', { len: answerBuffer.length || reasoningBuffer.length });
+        statusIndicator.style.backgroundColor = '#0e7a0d';
+        statusIndicator.title = 'Connected';
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            logToServer('INFO', 'Stream aborted by user', { len: answerBuffer.length || reasoningBuffer.length });
+            if (answerBuffer || reasoningBuffer) {
+                finalizeDisplay();
+                await saveChatState();
+            } else if (aiMsgDiv) {
+                aiMsgDiv.remove();
+            }
+        } else {
+            if (aiMsgDiv) {
+                aiMsgDiv.remove();
+            }
+            console.error(error);
+            showError(error.message || 'Failed to send message');
+            logToServer('ERROR', 'Message Send Failed', error.message);
+            appendMessageDiv('System', `Error: ${escapeHtml(error.message)}`, 'ai');
+        }
+    } finally {
+        state.isGenerating = false;
+        sendBtn.disabled = false;
+        if (stopBtn) stopBtn.hidden = true;
+        sendBtn.hidden = false;
+        scrollToBottom();
+    }
 }
 
 async function sendMessage() {
     if (state.isGenerating) return;
-    const text = window.easyMDE.value().trim();
+    const text = getInputText().trim();
     if (!text) return;
     if (!modelSelect.value) { alert('Select a model'); return; }
 
@@ -702,9 +1401,14 @@ async function sendMessage() {
         chat.modelId = modelSelect.value;
         chat.endpointId = state.currentEndpointId;
 
-        // Inject System Prompt if present
-        if (chat.systemPromptDraft && chat.systemPromptDraft.trim()) {
-            chat.messages.push({ role: 'system', content: chat.systemPromptDraft.trim() });
+        // Inject endpoint system prompt if present and no chat override
+        const ep = state.endpoints.find(e => e.id === state.currentEndpointId);
+        const sys = chat.systemPromptDraft !== undefined
+            ? chat.systemPromptDraft.trim()
+            : (chat.systemPrompt || (ep?.systemPrompt || ''));
+        if (sys) {
+            chat.messages.push({ role: 'system', content: sys });
+            chat.systemPrompt = sys;
             delete chat.systemPromptDraft; // Clear draft after using
         }
 
@@ -717,7 +1421,7 @@ async function sendMessage() {
         }
 
         // Re-run setCurrentChat to lock UI immediately
-        setCurrentChat(chat.id);
+        await setCurrentChat(chat.id);
     }
 
     // Prepare content for UI and API
@@ -750,109 +1454,245 @@ async function sendMessage() {
     // We'll update appendMessageDiv to handle the 'messages' array format if reading from history, 
     // but for immediate display we pre-render.
 
-    const msgDiv = appendMessageDiv('User', null, 'user', uiContent);
-
-    chat.messages.push({ role: 'user', content: apiContent }); // Store full structure
+    chat.messages.push({ role: 'user', content: apiContent, createdAt: new Date().toISOString() }); // Store full structure
+    const userMsgIndex = chat.messages.length - 1;
+    appendMessageDiv('User', null, 'user', uiContent, chat, userMsgIndex, chat.messages[userMsgIndex].createdAt);
 
     updateChatTitle(chat, text);
     await saveChatState();
     scrollToBottom();
 
-    window.easyMDE.value('');
-    // userInput.style.height = 'auto'; // EasyMDE handles size
+    clearInput();
 
-    state.isGenerating = true;
-    statusIndicator.style.backgroundColor = '#f7630c'; // Yellow (Thinking)
+    await generateAssistantResponse(chat);
+}
 
-    // Create AI Placeholder
-    const aiMsgDiv = appendMessageDiv('AI', '', 'ai');
-    const aiBodyDiv = aiMsgDiv.querySelector('.msg-body');
-    aiBodyDiv.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
-    scrollToBottom();
+// --- Presets / Agents ---
+function generateId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
 
+function normalizePreset(raw) {
+    return {
+        id: raw.id || generateId(),
+        name: (raw.name || 'Unnamed Agent').trim(),
+        endpointId: raw.endpointId || '',
+        modelId: (raw.modelId || '').trim(),
+        systemPrompt: (raw.systemPrompt || '').trim(),
+        tags: Array.isArray(raw.tags) ? raw.tags.filter(Boolean) : ((raw.tags || '').split(',').map(t => t.trim()).filter(Boolean))
+    };
+}
+
+function loadPresets() {
     try {
-        const payload = {
-            endpointId: chat.endpointId || state.currentEndpointId,
-            model: chat.modelId || modelSelect.value,
-            messages: chat.messages,
-            temperature: chat.temperature || 0.7
-        };
-        logToServer('INFO', 'Sending Message', payload);
-
-        const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (aiMsgDiv) aiMsgDiv.remove();
-
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            let msg = `Error ${response.status}`;
-            if (err.error) {
-                if (typeof err.error === 'string') msg = err.error;
-                else if (typeof err.error === 'object') {
-                    if (err.error.message) msg = err.error.message;
-                    else if (err.error.detail) msg = err.error.detail;
-                    else msg = JSON.stringify(err.error);
-                }
-            } else if (err.detail) {
-                msg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
-            } else if (err.message) {
-                msg = err.message;
-            }
-            throw new Error(msg);
-        }
-
-        const data = await response.json();
-
-        if (data.choices && data.choices[0]) {
-            const content = data.choices[0].message.content;
-            const aiHtml = marked.parse(content);
-
-            appendMessageDiv('AI', content, 'ai', aiHtml);
-            chat.messages.push({ role: 'assistant', content: content });
-            await saveChatState();
-            logToServer('INFO', 'Message Received', { len: content.length });
-        } else {
-            console.error('Unexpected response:', data);
-            showError('Invalid response format from API');
-            appendMessageDiv('System', 'Invalid API Response', 'ai');
-            logToServer('ERROR', 'Invalid API Response', data);
-        }
-    } catch (error) {
-        if (aiMsgDiv) aiMsgDiv.remove();
-        console.error(error);
-        showError(error.message || 'Failed to send message');
-        logToServer('ERROR', 'Message Send Failed', error.message);
-        // Optional: dont show system message if using toast?  
-        // Or show it so it's in history. Let's keep it.
-        appendMessageDiv('System', `Error: ${error.message}`, 'ai');
-    } finally {
-        state.isGenerating = false;
-        sendBtn.disabled = false;
-        scrollToBottom();
+        const raw = localStorage.getItem('aiui_public_presets');
+        state.presets = raw ? JSON.parse(raw) : [];
+        const current = localStorage.getItem('aiui_public_current_preset');
+        state.currentPresetId = current && state.presets.find(p => p.id === current) ? current : null;
+    } catch (e) {
+        state.presets = [];
+        state.currentPresetId = null;
     }
+}
+
+function savePresets() {
+    localStorage.setItem('aiui_public_presets', JSON.stringify(state.presets));
+    localStorage.setItem('aiui_public_current_preset', state.currentPresetId || '');
+}
+
+function renderPresetSelect() {
+    presetSelect.innerHTML = '<option value="">No Agent</option>';
+    state.presets.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name;
+        presetSelect.appendChild(opt);
+    });
+    presetSelect.value = state.currentPresetId || '';
+}
+
+function renderPresetsList() {
+    presetsList.innerHTML = '';
+    if (!state.presets.length) {
+        presetsList.innerHTML = '<div style="padding:0.5rem 0;opacity:.6;font-size:.85rem;">No agents yet</div>';
+        return;
+    }
+    state.presets.forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'endpoint-item';
+        item.innerHTML = `
+            <div class="endpoint-info"><h4></h4></div>
+            <div class="endpoint-actions">
+                <button class="edit-preset-btn icon-btn" title="Edit">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                </button>
+                <button class="delete-preset-btn icon-btn delete-btn" title="Delete">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                </button>
+            </div>
+        `;
+        item.querySelector('h4').textContent = p.name;
+        item.querySelector('.edit-preset-btn').addEventListener('click', () => editPresetById(p.id));
+        item.querySelector('.delete-preset-btn').addEventListener('click', () => {
+            if (confirm('Delete this agent?')) {
+                state.presets = state.presets.filter(x => x.id !== p.id);
+                if (state.currentPresetId === p.id) state.currentPresetId = null;
+                savePresets();
+                renderPresetsList();
+                renderPresetSelect();
+            }
+        });
+        presetsList.appendChild(item);
+    });
+}
+
+function resetPresetForm() {
+    document.getElementById('preset-edit-id').value = '';
+    document.getElementById('preset-form-title').textContent = 'Add Agent';
+    document.getElementById('preset-name').value = '';
+    renderPresetEndpointOptions();
+    document.getElementById('preset-model').value = '';
+    document.getElementById('preset-prompt').value = '';
+    document.getElementById('preset-tags').value = '';
+    presetForm.classList.remove('hidden');
+}
+
+function renderPresetEndpointOptions() {
+    const sel = document.getElementById('preset-endpoint');
+    sel.innerHTML = '';
+    state.endpoints.forEach(ep => {
+        const opt = document.createElement('option');
+        opt.value = ep.id;
+        opt.textContent = ep.name;
+        sel.appendChild(opt);
+    });
+    sel.value = state.currentEndpointId || state.endpoints[0]?.id || '';
+}
+
+function editPresetById(id) {
+    const p = state.presets.find(x => x.id === id);
+    if (!p) return;
+    document.getElementById('preset-edit-id').value = p.id;
+    document.getElementById('preset-form-title').textContent = 'Edit Agent';
+    document.getElementById('preset-name').value = p.name;
+    renderPresetEndpointOptions();
+    document.getElementById('preset-endpoint').value = p.endpointId || state.currentEndpointId || '';
+    document.getElementById('preset-model').value = p.modelId || '';
+    document.getElementById('preset-prompt').value = p.systemPrompt || '';
+    document.getElementById('preset-tags').value = (p.tags || []).join(', ');
+    presetForm.classList.remove('hidden');
+}
+
+async function savePresetFromForm() {
+    const raw = {
+        id: document.getElementById('preset-edit-id').value,
+        name: document.getElementById('preset-name').value.trim(),
+        endpointId: document.getElementById('preset-endpoint').value,
+        modelId: document.getElementById('preset-model').value.trim(),
+        systemPrompt: document.getElementById('preset-prompt').value.trim(),
+        tags: document.getElementById('preset-tags').value.split(',').map(t => t.trim()).filter(Boolean)
+    };
+    if (!raw.name) { showError('Agent name required'); return; }
+    const preset = normalizePreset(raw);
+    const idx = state.presets.findIndex(p => p.id === preset.id);
+    if (idx >= 0) state.presets[idx] = preset;
+    else state.presets.push(preset);
+    savePresets();
+    presetForm.classList.add('hidden');
+    renderPresetsList();
+    renderPresetSelect();
+}
+
+function applyPreset(presetId) {
+    if (!presetId) return;
+    state.currentPresetId = presetId;
+    savePresets();
+    const preset = state.presets.find(p => p.id === presetId);
+    if (!preset) return;
+    if (preset.endpointId && state.endpoints.find(e => e.id === preset.endpointId)) {
+        state.currentEndpointId = preset.endpointId;
+        endpointSelect.value = preset.endpointId;
+    }
+    const chat = getCurrentChat();
+    if (chat && chat.messages.length === 0) {
+        chat.endpointId = state.currentEndpointId;
+        chat.modelId = preset.modelId || null;
+        if (preset.systemPrompt) chat.systemPrompt = preset.systemPrompt;
+        saveChatState();
+    }
+
+    if (preset.modelId) fetchModels(true).then(() => {
+        if (modelSelect.querySelector(`option[value="${preset.modelId}"]`)) modelSelect.value = preset.modelId;
+    });
+    if (preset.systemPrompt && chat && !chat.messages.length) {
+        renderMessages();
+    }
+}
+
+// --- Export / Import Chats ---
+function exportChats() {
+    const data = JSON.stringify(state.chats, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `aiui-chats-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+async function importChats(file) {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const parsed = JSON.parse(e.target.result);
+            if (!Array.isArray(parsed)) throw new Error('Invalid chats file');
+            state.chats = parsed.map(c => ({
+                id: c.id || generateId(),
+                title: c.title || 'Imported Chat',
+                folder: c.folder || DEFAULT_FOLDER,
+                tags: Array.isArray(c.tags) ? c.tags : [],
+                endpointId: c.endpointId,
+                modelId: c.modelId,
+                systemPrompt: c.systemPrompt || '',
+                messages: Array.isArray(c.messages) ? c.messages : [],
+                timestamp: c.timestamp || Date.now()
+            }));
+            state.currentChatId = state.chats[0]?.id || null;
+            await saveChatState();
+            renderChatList();
+            if (state.currentChatId) await setCurrentChat(state.currentChatId);
+            else renderMessages();
+            showError('Chats imported successfully');
+        } catch (err) {
+            showError('Import failed: ' + err.message);
+        }
+    };
+    reader.readAsText(file);
 }
 
 // Listeners
 // userInput auto-resize and Enter logic replaced by EasyMDE keymaps
 
 // Setup EasyMDE
+function getInputText() {
+    if (window.easyMDE) return window.easyMDE.value();
+    return userInput ? userInput.value : '';
+}
+
+function clearInput() {
+    if (window.easyMDE) {
+        window.easyMDE.value('');
+    } else if (userInput) {
+        userInput.value = '';
+    }
+}
+
 function initEasyMDE() {
     window.easyMDE = new EasyMDE({
         element: document.getElementById('user-input'),
         autoDownloadFontAwesome: true, // Needed for icons
         status: false,
         spellChecker: false,
-        toolbar: [
-            "bold", "italic", "strikethrough", "heading", "|",
-            "code", "quote", "unordered-list", "ordered-list", "|",
-            "link", "image", "table", "horizontal-rule", "|",
-            "preview", "side-by-side", "fullscreen", "|",
-            "undo", "redo"
-        ],
+        toolbar: false,
         forceSync: true,
         placeholder: "Message AI...",
         minHeight: "0px",
@@ -891,9 +1731,37 @@ function initEasyMDE() {
 
 // Global listeners
 sendBtn.addEventListener('click', sendMessage);
+userInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    // Ctrl/Cmd + Enter to send
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        sendMessage();
+        return;
+    }
+    // / focuses search when not typing in an input
+    if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName) && !e.target.isContentEditable) {
+        e.preventDefault();
+        chatSearch.focus();
+        return;
+    }
+    // Esc closes modals/sidebar
+    if (e.key === 'Escape') {
+        settingsModal.style.display = 'none';
+        sidebar.classList.remove('open');
+        sidebarOverlay.classList.remove('show');
+    }
+});
+
 newChatBtn.addEventListener('click', async () => {
     const id = await createNewChat();
-    setCurrentChat(id);
+    await setCurrentChat(id);
 });
 menuBtn.addEventListener('click', () => {
     sidebar.classList.toggle('open');
@@ -905,16 +1773,83 @@ sidebarOverlay.addEventListener('click', () => {
 });
 
 // Settings Listeners
-settingsBtn.addEventListener('click', () => settingsModal.style.display = 'block');
+themeToggleBtn.addEventListener('click', cycleTheme);
+
+settingsBtn.addEventListener('click', () => {
+    settingsModal.style.display = 'block';
+    renderPresetsList();
+    renderPresetEndpointOptions();
+    document.getElementById('proxy-base-url').value = state.proxyBaseUrl || localStorage.getItem('aiui_proxy_base') || '';
+    document.getElementById('search-engine-select').value = state.searchEngine || 'auto';
+});
 closeBtn.addEventListener('click', () => settingsModal.style.display = 'none');
 window.onclick = (e) => { if (e.target === settingsModal) settingsModal.style.display = 'none'; };
+
+document.getElementById('save-proxy-btn').addEventListener('click', () => {
+    const input = document.getElementById('proxy-base-url');
+    const url = (input.value || '').trim().replace(/\/+$/, '');
+    state.proxyBaseUrl = url;
+    localStorage.setItem('aiui_proxy_base', url);
+    showError('Proxy URL saved');
+});
+
+document.getElementById('save-search-engine-btn').addEventListener('click', async () => {
+    const select = document.getElementById('search-engine-select');
+    const engine = select.value;
+    try {
+        const res = await apiFetch('/api/search-engine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engine })
+        });
+        if (!res.ok) throw new Error('Failed to save search engine');
+        const data = await res.json();
+        state.searchEngine = data.searchEngine || 'auto';
+        showError('Search engine saved');
+    } catch (e) {
+        console.error('Failed to save search engine', e);
+        showError('Failed to save search engine: ' + e.message);
+    }
+});
+
+// Collapsible settings sections
+document.querySelectorAll('.settings-section-header').forEach(header => {
+    header.addEventListener('click', () => {
+        const targetId = header.dataset.target;
+        const content = document.getElementById(targetId);
+        if (!content) return;
+        const isOpen = content.classList.contains('open');
+        content.classList.toggle('open');
+        header.setAttribute('aria-expanded', String(!isOpen));
+    });
+});
+
+// Expand Endpoints section by default
+const endpointsHeader = document.querySelector('.settings-section-header[data-target="endpoints-section"]');
+if (endpointsHeader) {
+    const endpointsContent = document.getElementById('endpoints-section');
+    if (endpointsContent) {
+        endpointsContent.classList.add('open');
+        endpointsHeader.setAttribute('aria-expanded', 'true');
+    }
+}
+
+document.getElementById('clear-cache-btn').addEventListener('click', () => {
+    if (!confirm('Delete all AI-UI browser caches and reload?')) return;
+    try {
+        Object.keys(localStorage)
+            .filter(k => k.startsWith('aiui_'))
+            .forEach(k => localStorage.removeItem(k));
+    } catch (e) {}
+    location.reload();
+});
 
 refreshModelsBtn.addEventListener('click', async () => {
     try {
         refreshModelsBtn.classList.add('spinning');
         refreshModelsBtn.disabled = true;
 
-        const res = await fetch('/api/models/refresh', { method: 'POST' });
+        const res = await apiFetch('/api/models/refresh', { method: 'POST' });
         const data = await res.json();
 
         if (!res.ok) throw new Error(data.error || 'Refresh failed');
@@ -932,15 +1867,56 @@ refreshModelsBtn.addEventListener('click', async () => {
 
 endpointSelect.addEventListener('change', async () => {
     const id = endpointSelect.value;
-    await fetch('/api/endpoints/select', {
+    await apiFetch('/api/endpoints/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
     });
     state.currentEndpointId = id;
-    await fetchModels();
-    if (state.currentChatId) setCurrentChat(state.currentChatId); // Re-evaluate locks
+    state.currentPresetId = null;
+    presetSelect.value = '';
+    savePresets();
+
+    // Update empty chat's source so setCurrentChat doesn't revert it
+    const chat = getCurrentChat();
+    if (chat && chat.messages.length === 0) {
+        chat.endpointId = id;
+        chat.modelId = null;
+        await saveChatState();
+    }
+
+    await fetchModels(true);
+    if (state.currentChatId) await setCurrentChat(state.currentChatId);
 });
+
+presetSelect.addEventListener('change', () => {
+    state.currentPresetId = presetSelect.value || null;
+    savePresets();
+    applyPreset(state.currentPresetId);
+});
+
+chatSearch.addEventListener('input', (e) => {
+    searchQuery = e.target.value;
+    renderChatList();
+});
+
+folderList.addEventListener('click', (e) => {
+    if (e.target.classList.contains('folder-pill')) {
+        currentFolder = e.target.dataset.folder;
+        renderChatList();
+    }
+});
+
+exportChatsBtn.addEventListener('click', exportChats);
+importChatsBtn.addEventListener('click', () => importChatsInput.click());
+importChatsInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) importChats(e.target.files[0]);
+    importChatsInput.value = '';
+});
+
+addPresetBtn.addEventListener('click', resetPresetForm);
+cancelPresetBtn.addEventListener('click', () => presetForm.classList.add('hidden'));
+savePresetBtn.addEventListener('click', savePresetFromForm);
 
 // addEndpointBtn listener moved up to Settings Logic section
 
@@ -958,7 +1934,18 @@ window.addEventListener('resize', () => {
 });
 
 // Start
-initEasyMDE();
+try {
+    initEasyMDE();
+} catch (e) {
+    console.error('initEasyMDE failed', e);
+}
+
+try {
+    init();
+} catch (e) {
+    console.error('init failed', e);
+}
+
 // --- Image Upload Logic ---
 
 function updateAttachButtonState() {
@@ -1044,10 +2031,6 @@ function renderImagePreviews() {
         imagePreviewContainer.appendChild(div);
     });
 }
-
-// Initialize
-init();
-
 
 // --- Global Error Handling ---
 

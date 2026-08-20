@@ -1,17 +1,17 @@
 const fs = require('fs');
 const http = require('http');
+const { getConfig } = require('./utils/helpers');
 
-const API_KEY = 'my-static-secret-key-123'; // Matches config.json
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:3001';
 
 async function testEndpoint(name, fn) {
     try {
         process.stdout.write(`Testing ${name}... `);
         await fn();
-        console.log('✅ OK');
+        console.log('OK');
         return true;
     } catch (e) {
-        console.log('❌ FAIL');
+        console.log('FAIL');
         console.error('  Error:', e.message);
         return false;
     }
@@ -26,7 +26,13 @@ function req(method, path, body = null, headers = {}) {
         const r = http.request(`${BASE_URL}${path}`, opts, (res) => {
             let data = '';
             res.on('data', c => data += c);
-            res.on('end', () => resolve({ status: res.statusCode, data: data ? JSON.parse(data) : {} }));
+            res.on('end', () => {
+                try {
+                    resolve({ status: res.statusCode, data: data ? JSON.parse(data) : {} });
+                } catch (e) {
+                    resolve({ status: res.statusCode, data: data });
+                }
+            });
         });
         r.on('error', reject);
         if (body) r.write(JSON.stringify(body));
@@ -37,11 +43,21 @@ function req(method, path, body = null, headers = {}) {
 (async () => {
     console.log('--- System Validation ---\n');
 
+    // Load the generated unified API key from config instead of hardcoding it.
+    let apiKey;
+    try {
+        const config = await getConfig();
+        apiKey = config.unifiedApiKey;
+    } catch (e) {
+        console.error('Unable to load config for validation:', e.message);
+        process.exit(1);
+    }
+
     // 1. Check Server Response
     await testEndpoint('GET /api/endpoints', async () => {
         const res = await req('GET', '/api/endpoints');
         if (res.status !== 200) throw new Error(`Status ${res.status}`);
-        if (!res.data.endpoints) throw new Error('No endpoints found');
+        if (!res.data || !Array.isArray(res.data.endpoints)) throw new Error('No endpoints array found');
     });
 
     // 2. Check Client Log Ingestion
@@ -56,16 +72,13 @@ function req(method, path, body = null, headers = {}) {
 
     // 3. Check Unified API Auth
     await testEndpoint('Unified Query (No Key)', async () => {
-        // Should fail or match policy. As per code, it allows if no key configured? 
-        // Wait, server.js checkUnifiedAuth: if (!config.unifiedApiKey) return next();
-        // We set 'my-static-secret-key-123' in config. So it should 401 without key.
         const res = await req('GET', '/unified/v1/models');
         if (res.status !== 401) throw new Error(`Expected 401, got ${res.status}`);
     });
 
     await testEndpoint('Unified Query (With Key)', async () => {
         const res = await req('GET', '/unified/v1/models', null, {
-            'Authorization': `Bearer ${API_KEY}`
+            'Authorization': `Bearer ${apiKey}`
         });
         if (res.status !== 200) throw new Error(`Status ${res.status}: ${JSON.stringify(res.data)}`);
     });
@@ -74,21 +87,21 @@ function req(method, path, body = null, headers = {}) {
     console.log('\n--- Checking Log Files ---');
 
     if (fs.existsSync('logs/server_logs.txt')) {
-        console.log('✅ logs/server_logs.txt exists');
+        console.log('OK logs/server_logs.txt exists');
         const content = fs.readFileSync('logs/server_logs.txt', 'utf8');
         if (content.includes('Incoming Request: GET /api/endpoints')) console.log('  Content Verified: Endpoint hit logged');
-        else console.log('  ❌ Missing specific log entry');
+        else console.log('  Missing specific log entry');
     } else {
-        console.log('❌ logs/server_logs.txt missing');
+        console.log('FAIL logs/server_logs.txt missing');
     }
 
     if (fs.existsSync('logs/client_logs.txt')) {
-        console.log('✅ logs/client_logs.txt exists');
+        console.log('OK logs/client_logs.txt exists');
         const content = fs.readFileSync('logs/client_logs.txt', 'utf8');
         if (content.includes('Validation Script Test')) console.log('  Content Verified: Test log found');
-        else console.log('  ❌ Missing test log entry');
+        else console.log('  Missing test log entry');
     } else {
-        console.log('❌ logs/client_logs.txt missing');
+        console.log('FAIL logs/client_logs.txt missing');
     }
 
 })();
