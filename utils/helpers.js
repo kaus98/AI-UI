@@ -234,18 +234,19 @@ async function getOrRefreshAccessToken(endpoint, config) {
 }
 
 // Build a direct or Cloudflare-proxied URL for an OpenAI-style path
-function buildAiUrl(baseUrl, openaiPath) {
+function buildAiUrl(baseUrl, openaiPath, config = null) {
     const base = baseUrl.replace(/\/+$/, '');
     const needsV1 = !base.endsWith('/v1');
     const fullPath = needsV1 ? `/v1${openaiPath}` : openaiPath;
-    if (PROXY_BASE_URL) return `${PROXY_BASE_URL}${fullPath}?target=${encodeURIComponent(base)}`;
+    const proxyBaseUrl = (config && config.proxyBaseUrl) ? config.proxyBaseUrl.replace(/\/+$/, '') : PROXY_BASE_URL;
+    if (proxyBaseUrl) return `${proxyBaseUrl}${fullPath}?target=${encodeURIComponent(base)}`;
     return `${base}${fullPath}`;
 }
 
 // Helper to fetch from a single endpoint
 async function fetchModelsFromEndpoint(endpoint, config) {
     const authToken = await getOrRefreshAccessToken(endpoint, config);
-    const targetUrl = buildAiUrl(endpoint.baseUrl, '/models');
+    const targetUrl = buildAiUrl(endpoint.baseUrl, '/models', config);
 
     logToFile('server', `Fetching models from ${endpoint.name}`, { url: targetUrl });
 

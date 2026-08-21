@@ -18,5 +18,8 @@
     "express": "^5.2.1",
     "selenium-webdriver": "^4.47.0",
     "serve-favicon": "^2.5.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.125.0"
   }
 }

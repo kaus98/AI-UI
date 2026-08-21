@@ -360,7 +360,7 @@ router.post('/chat', async (req, res) => {
 
         let chatBody = { ...restBody, messages: sanitizedMessages };
 
-        const targetUrl = buildAiUrl(endpoint.baseUrl, '/chat/completions');
+        const targetUrl = buildAiUrl(endpoint.baseUrl, '/chat/completions', config);
         console.log(`Sending chat to: ${targetUrl}`);
 
         const headers = { 'Content-Type': 'application/json' };
@@ -531,6 +531,19 @@ router.post('/search-engine', async (req, res) => {
         res.json({ searchEngine: config.searchEngine || 'auto' });
     } catch (e) {
         console.error('Search engine update error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+router.post('/proxy-base-url', async (req, res) => {
+    try {
+        const config = await getConfig();
+        const { proxyBaseUrl } = req.body;
+        config.proxyBaseUrl = proxyBaseUrl || '';
+        await saveConfig(config);
+        res.json({ proxyBaseUrl: config.proxyBaseUrl });
+    } catch (e) {
+        console.error('Proxy base URL update error:', e.message);
         res.status(500).json({ error: e.message });
     }
 });

@@ -228,8 +228,10 @@ let searchQuery = '';
 
 // --- Proxy / API base helpers ---
 function getApiUrl(path) {
-    const base = (state.proxyBaseUrl || '').replace(/\/+$/, '');
-    return base ? `${base}${path}` : path;
+    // In the Node.js frontend, API calls always go to the current origin's backend.
+    // The "Proxy Base URL" setting configures the backend's upstream proxy,
+    // so we do NOT prepend it to frontend /api/... paths.
+    return path;
 }
 
 async function apiFetch(path, options = {}) {
@@ -1785,12 +1787,24 @@ settingsBtn.addEventListener('click', () => {
 closeBtn.addEventListener('click', () => settingsModal.style.display = 'none');
 window.onclick = (e) => { if (e.target === settingsModal) settingsModal.style.display = 'none'; };
 
-document.getElementById('save-proxy-btn').addEventListener('click', () => {
+document.getElementById('save-proxy-btn').addEventListener('click', async () => {
     const input = document.getElementById('proxy-base-url');
     const url = (input.value || '').trim().replace(/\/+$/, '');
     state.proxyBaseUrl = url;
     localStorage.setItem('aiui_proxy_base', url);
-    showError('Proxy URL saved');
+    
+    try {
+        const res = await apiFetch('/api/proxy-base-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proxyBaseUrl: url })
+        });
+        if (res.ok) {
+            showError('Proxy URL saved locally and in config.json');
+            return;
+        }
+    } catch (e) {}
+    showError('Proxy URL saved locally');
 });
 
 document.getElementById('save-search-engine-btn').addEventListener('click', async () => {
