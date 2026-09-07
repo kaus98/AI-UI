@@ -71,7 +71,7 @@ async function getConfig() {
             id: 'web_search',
             name: 'web_search',
             description: 'Search the web for current, factual, or real-time information.',
-            enabled: false,
+            enabled: true,
             handler: 'web_search',
             parameters: {
                 type: 'object',
@@ -99,7 +99,7 @@ async function getConfig() {
             id: 'wikipedia',
             name: 'wikipedia',
             description: 'Search Wikipedia for a topic and return a short summary.',
-            enabled: false,
+            enabled: true,
             handler: 'wikipedia',
             parameters: {
                 type: 'object',

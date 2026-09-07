@@ -63,6 +63,18 @@ const cancelPresetBtn = document.getElementById('cancel-preset-btn');
 const savePresetBtn = document.getElementById('save-preset-btn');
 
 
+// crypto.randomUUID polyfill for Safari 15.3 and below
+if (!crypto.randomUUID) {
+    crypto.randomUUID = function() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    };
+}
+
+
 // ... (renderChatList update) ...
 
 function renderChatList() {
@@ -581,10 +593,10 @@ async function setCurrentChat(id) {
         }
     }
 
-    // UI Locking Logic
+    // UI Locking Logic - Allow model/endpoint changes with confirmation
     if (chat && chat.messages.length > 0) {
-        modelSelect.disabled = true;
-        endpointSelect.disabled = true;
+        modelSelect.disabled = false;
+        endpointSelect.disabled = false;
         sendBtn.disabled = false;
         if (window.easyMDE) window.easyMDE.codemirror.setOption('readOnly', false);
     } else {
@@ -1755,7 +1767,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         settingsModal.style.display = 'none';
         sidebar.classList.remove('open');
-        sidebarOverlay.classList.remove('show');
+        sidebarOverlay.classList.remove('active');
     }
 });
 
@@ -1765,12 +1777,41 @@ newChatBtn.addEventListener('click', async () => {
 });
 menuBtn.addEventListener('click', () => {
     sidebar.classList.toggle('open');
-    sidebarOverlay.classList.toggle('show');
+    sidebarOverlay.classList.toggle('active');
 });
 sidebarOverlay.addEventListener('click', () => {
     sidebar.classList.remove('open');
-    sidebarOverlay.classList.remove('show');
+    sidebarOverlay.classList.remove('active');
 });
+
+// Touch gesture support for mobile sidebar
+let touchStartX = 0;
+let touchEndX = 0;
+const SWIPE_THRESHOLD = 50;
+
+document.addEventListener('touchstart', (e) => {
+    touchStartX = e.changedTouches[0].screenX;
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+    touchEndX = e.changedTouches[0].screenX;
+    handleSwipe();
+}, { passive: true });
+
+function handleSwipe() {
+    const diff = touchStartX - touchEndX;
+    
+    // Swipe left - close sidebar
+    if (diff > SWIPE_THRESHOLD && sidebar.classList.contains('open')) {
+        sidebar.classList.remove('open');
+        sidebarOverlay.classList.remove('active');
+    }
+    // Swipe right - open sidebar
+    else if (diff < -SWIPE_THRESHOLD && !sidebar.classList.contains('open')) {
+        sidebar.classList.add('open');
+        sidebarOverlay.classList.add('active');
+    }
+}
 
 // Settings Listeners
 themeToggleBtn.addEventListener('click', cycleTheme);
@@ -1867,6 +1908,27 @@ refreshModelsBtn.addEventListener('click', async () => {
 
 endpointSelect.addEventListener('change', async () => {
     const id = endpointSelect.value;
+    const chat = getCurrentChat();
+    
+    // Confirm if changing endpoint in middle of chat
+    if (chat && chat.messages.length > 0 && chat.endpointId !== id) {
+        const oldEndpoint = state.endpoints.find(e => e.id === chat.endpointId);
+        const newEndpoint = state.endpoints.find(e => e.id === id);
+        const oldName = oldEndpoint ? oldEndpoint.name : 'Unknown';
+        const newName = newEndpoint ? newEndpoint.name : 'Unknown';
+        
+        const confirmed = confirm(
+            `You are changing the model provider from "${oldName}" to "${newName}".\n\n` +
+            `This will change the endpoint for the current chat. Continue?`
+        );
+        
+        if (!confirmed) {
+            // Revert to original endpoint
+            endpointSelect.value = chat.endpointId;
+            return;
+        }
+    }
+    
     await apiFetch('/api/endpoints/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1877,11 +1939,9 @@ endpointSelect.addEventListener('change', async () => {
     presetSelect.value = '';
     savePresets();
 
-    // Update empty chat's source so setCurrentChat doesn't revert it
-    const chat = getCurrentChat();
-    if (chat && chat.messages.length === 0) {
+    // Update chat's endpoint
+    if (chat) {
         chat.endpointId = id;
-        chat.modelId = null;
         await saveChatState();
     }
 
@@ -1967,7 +2027,32 @@ function updateAttachButtonState() {
     }
 }
 
-modelSelect.addEventListener('change', updateAttachButtonState);
+modelSelect.addEventListener('change', async (e) => {
+    updateAttachButtonState();
+    
+    const chat = getCurrentChat();
+    if (chat && chat.messages.length > 0) {
+        const newModel = e.target.value;
+        const oldModel = chat.modelId;
+        
+        if (newModel !== oldModel) {
+            const confirmed = confirm(
+                `You are changing the model from "${oldModel || 'None'}" to "${newModel}".\n\n` +
+                `This will change the model for the current chat. Continue?`
+            );
+            
+            if (confirmed) {
+                chat.modelId = newModel;
+                await saveChatState();
+                renderChatList();
+            } else {
+                // Revert to original model
+                e.target.value = oldModel;
+                updateAttachButtonState();
+            }
+        }
+    }
+});
 
 attachBtn.addEventListener('click', () => {
     imageUploadInput.click();

@@ -3,57 +3,67 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#fafafa">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="AI Chat">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>AI Chat Interface</title>
+    <!-- Preconnect to external domains -->
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <!-- Segoe UI is a system font; no external import needed -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <!-- EasyMDE -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="styles.css?v=7">
+    <link rel="stylesheet" href="styles.css?v=8">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
 </head>
 
 <body>
+    <!-- Skip to main content for accessibility -->
+    <a href="#main-content" class="skip-to-content">Skip to main content</a>
+    
     <div class="app-container">
         <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
+        <aside class="sidebar" id="sidebar" aria-label="Chat history">
             <div class="sidebar-header">
-                <button id="new-chat-btn" class="new-chat-btn">
+                <button id="new-chat-btn" class="new-chat-btn" aria-label="Create new chat">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M12 5v14M5 12h14"></path>
                     </svg>
                     New Chat
                 </button>
             </div>
-            <div class="chat-list" id="chat-list">
+            <div class="chat-list" id="chat-list" role="navigation" aria-label="Chat history">
                 <div class="search-bar" style="padding: 0 0.5rem 0.5rem;">
-                    <input type="text" id="chat-search" placeholder="Search chats...">
+                    <input type="text" id="chat-search" placeholder="Search chats..." aria-label="Search chats">
                 </div>
-                <div class="folder-list" id="folder-list">
-                    <span class="folder-pill active" data-folder="All">All</span>
-                    <span class="folder-pill" data-folder="General">General</span>
-                    <span class="folder-pill" data-folder="Work">Work</span>
-                    <span class="folder-pill" data-folder="Personal">Personal</span>
-                    <span class="folder-pill" data-folder="Archive">Archive</span>
+                <div class="folder-list" id="folder-list" role="tablist" aria-label="Chat folders">
+                    <span class="folder-pill active" data-folder="All" role="tab" aria-selected="true" tabindex="0">All</span>
+                    <span class="folder-pill" data-folder="General" role="tab" aria-selected="false" tabindex="0">General</span>
+                    <span class="folder-pill" data-folder="Work" role="tab" aria-selected="false" tabindex="0">Work</span>
+                    <span class="folder-pill" data-folder="Personal" role="tab" aria-selected="false" tabindex="0">Personal</span>
+                    <span class="folder-pill" data-folder="Archive" role="tab" aria-selected="false" tabindex="0">Archive</span>
                 </div>
-                <div id="chat-items" style="display:flex; flex-direction:column; gap:2px;">
+                <div id="chat-items" style="display:flex; flex-direction:column; gap:2px;" role="list" aria-label="Chat list">
                     <!-- Chat items will be injected here -->
                 </div>
             </div>
         </aside>
-        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+        <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
 
-        <section class="main-content">
+        <section class="main-content" id="main-content">
             <!-- Sidebar / Header -->
             <header class="chat-header">
                 <div class="header-left">
-                    <button class="menu-btn" id="menu-btn" aria-label="Toggle Menu">
+                    <button class="menu-btn" id="menu-btn" aria-label="Toggle menu" aria-expanded="false" aria-controls="sidebar">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <line x1="3" y1="12" x2="21" y2="12"></line>
@@ -65,7 +75,7 @@
                         <img src="/favicon.png" alt="AI" class="logo-icon"
                             style="width: 32px; height: 32px; border-radius: 6px;">
                         <div class="endpoint-selector-wrapper">
-                            <select id="endpoint-select" class="endpoint-select">
+                            <select id="endpoint-select" class="endpoint-select" aria-label="Select endpoint">
                                 <option value="" disabled>Select Endpoint</option>
                             </select>
                         </div>
@@ -73,10 +83,10 @@
                 </div>
 
                 <div class="controls">
-                    <select id="preset-select" class="model-select" style="max-width:160px;">
+                    <select id="preset-select" class="model-select" style="max-width:160px;" aria-label="Select agent">
                         <option value="">No Agent</option>
                     </select>
-                    <button id="theme-toggle-btn" class="icon-btn" title="Toggle theme">
+                    <button id="theme-toggle-btn" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="5"></circle>
                             <line x1="12" y1="1" x2="12" y2="3"></line>
@@ -89,7 +99,7 @@
                             <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
                         </svg>
                     </button>
-                    <button id="settings-btn" class="icon-btn" title="Settings">
+                    <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Open settings">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <path
@@ -98,10 +108,10 @@
                             <circle cx="12" cy="12" r="3"></circle>
                         </svg>
                     </button>
-                    <select id="model-select" class="model-select">
+                    <select id="model-select" class="model-select" aria-label="Select model">
                         <option value="" disabled selected>Loading models...</option>
                     </select>
-                    <button id="refresh-models-btn" class="icon-btn" title="Refresh Models">
+                    <button id="refresh-models-btn" class="icon-btn" title="Refresh Models" aria-label="Refresh models">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <path d="M23 4v6h-6"></path>
@@ -109,12 +119,12 @@
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
                         </svg>
                     </button>
-                    <div class="status-indicator" id="status-indicator" title="Connected"></div>
+                    <div class="status-indicator" id="status-indicator" title="Connected" aria-label="Connected"></div>
                 </div>
             </header>
 
             <!-- Chat Area -->
-            <main class="chat-area" id="chat-container">
+            <main class="chat-area" id="chat-container" role="log" aria-live="polite" aria-label="Chat messages">
                 <div class="welcome-message">
                     <h2>Welcome</h2>
                     <p>Select a model and start chatting.</p>
@@ -128,13 +138,13 @@
                     <div id="image-preview-container" class="image-preview-container hidden"></div>
 
                     <!-- Hidden File Input -->
-                    <input type="file" id="image-upload" accept="image/*" multiple style="display: none;">
+                    <input type="file" id="image-upload" accept="image/*" multiple style="display: none;" aria-label="Upload images">
 
                     <div class="input-row">
-                        <textarea id="user-input" placeholder="Type a message..."></textarea>
+                        <textarea id="user-input" placeholder="Type a message..." aria-label="Message input" rows="1"></textarea>
 
                         <!-- Attach Button -->
-                        <button id="attach-btn" title="Attach Image">
+                        <button id="attach-btn" title="Attach Image" aria-label="Attach image">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path
@@ -145,13 +155,13 @@
 
                         <div id="tools-bar" class="tools-bar"></div>
 
-                        <button id="stop-btn" class="stop-btn" type="button" title="Stop generating" hidden>
+                        <button id="stop-btn" class="stop-btn" type="button" title="Stop generating" hidden aria-label="Stop generating">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"
                                 xmlns="http://www.w3.org/2000/svg">
                                 <rect x="6" y="6" width="12" height="12" rx="2" />
                             </svg>
                         </button>
-                        <button id="send-btn">
+                        <button id="send-btn" aria-label="Send message">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
                                 xmlns="http://www.w3.org/2000/svg">
                                 <path d="M7 11L12 6L17 11M12 18V7" stroke="currentColor" stroke-width="2"
@@ -387,7 +397,7 @@
             </div>
         </div>
     </div>
-    <script src="app.js?v=14"></script>
+    <script src="app.js?v=16"></script>
 </body>
 
 </html>

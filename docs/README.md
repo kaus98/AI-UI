@@ -6,10 +6,26 @@ A fully static, browser-based AI chat interface that runs on **GitHub Pages**.
 
 - Runs entirely in the browser — no server required.
 - Stores endpoints, settings, and chat history in `localStorage`.
-- On first visit, asks for an endpoints config (paste JSON or add one endpoint manually).
 - Supports **API Key** (`Authorization: Bearer ...`) and **OAuth2 Client Credentials** authentication.
 - Fetches model lists, sends chat-completion requests, streams responses, and renders Markdown.
 - All data is cleared when the browser session/cache is cleared.
+- **Responsive design** optimized for phones, tablets, and desktops.
+- **Cross-browser compatible** with Chrome, Firefox, Safari, and Edge.
+- **Accessibility features** including ARIA labels, keyboard navigation, and screen reader support.
+
+## Features
+
+- ✅ Multiple search engines (Bing, DuckDuckGo, Yahoo)
+- ✅ URL fetch with Selenium fallback
+- ✅ Wikipedia integration
+- ✅ Model/endpoint change confirmation
+- ✅ Responsive design (7 breakpoints)
+- ✅ Touch gestures (swipe to open/close sidebar)
+- ✅ Dark mode support
+- ✅ Image upload support
+- ✅ Streaming responses
+- ✅ Markdown rendering
+- ✅ Code syntax highlighting
 
 ## Deploy on GitHub Pages
 
@@ -69,3 +85,18 @@ Open `docs/index.html` directly in a browser, or serve the `docs/` folder with a
 ```bash
 npx serve docs
 ```
+
+Or with Python:
+
+```bash
+cd docs
+python -m http.server 8080
+```
+
+## Documentation
+
+For detailed information about the search system and features, see:
+
+- **[SEARCH_SYSTEM.md](SEARCH_SYSTEM.md)** - Complete search system documentation
+- **[SEARCH_QUICK_REFERENCE.md](SEARCH_QUICK_REFERENCE.md)** - Quick reference guide
+- **[SEARCH_CHANGES.md](SEARCH_CHANGES.md)** - Search system change log
