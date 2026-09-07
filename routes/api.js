@@ -340,14 +340,23 @@ router.post('/chat', async (req, res) => {
 
         const authToken = await getOrRefreshAccessToken(endpoint, config);
 
-        const activeToolIds = Array.isArray(req.body.activeTools)
-            ? req.body.activeTools
-            : (config.tools || []).filter(t => t.enabled).map(t => t.id);
-        const availableTools = (config.tools || []).filter(t => activeToolIds.includes(t.id));
-        const toolsForLLM = availableTools.map(t => ({
-            type: 'function',
-            function: { name: t.name, description: t.description, parameters: t.parameters }
-        }));
+        // Disable tools for localhost endpoints (local models like LLaMA don't support function calling)
+        const isLocalhost = endpoint.baseUrl.includes('localhost') || endpoint.baseUrl.includes('127.0.0.1');
+        let availableTools = [];
+        let toolsForLLM = [];
+        
+        if (!isLocalhost) {
+            const activeToolIds = Array.isArray(req.body.activeTools)
+                ? req.body.activeTools
+                : (config.tools || []).filter(t => t.enabled).map(t => t.id);
+            availableTools = (config.tools || []).filter(t => activeToolIds.includes(t.id));
+            toolsForLLM = availableTools.map(t => ({
+                type: 'function',
+                function: { name: t.name, description: t.description, parameters: t.parameters }
+            }));
+        } else {
+            console.log('Tools disabled for localhost endpoint');
+        }
 
         // Prepare body (remove custom fields)
         const { endpointId: _, endpoint: __, messages, activeTools, ...restBody } = req.body;
@@ -359,15 +368,29 @@ router.post('/chat', async (req, res) => {
         }));
 
         let chatBody = { ...restBody, messages: sanitizedMessages };
+        
+        // Ensure stream parameter is preserved (default to true if not specified)
+        if (chatBody.stream === undefined) {
+            chatBody.stream = true;
+        }
 
         const targetUrl = buildAiUrl(endpoint.baseUrl, '/chat/completions', config);
         console.log(`Sending chat to: ${targetUrl}`);
+        
+        // Force streaming for localhost endpoints (for local models like LLaMA server)
+        // isLocalhost is already defined above, so we just use it here
+        if (isLocalhost) {
+            chatBody.stream = true;
+            console.log('Forcing streaming for localhost endpoint');
+        }
+        
+        console.log('Chat request stream setting:', chatBody.stream);
 
         const headers = { 'Content-Type': 'application/json' };
         if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
         // If tools are active, do a non-stream call first to detect tool calls
-        if (toolsForLLM.length > 0) {
+        if (toolsForLLM.length > 0 && !isLocalhost) {
             chatBody = { ...chatBody, tools: toolsForLLM, tool_choice: 'auto', stream: false };
             if (!chatBody.messages.some(m => m.role === 'system')) {
                 chatBody.messages.unshift({
@@ -426,6 +449,7 @@ router.post('/chat', async (req, res) => {
                 }
 
                 const finalBody = { ...restBody, messages: newMessages, stream: true };
+                console.log('Tool execution complete, making final streaming call');
                 const finalResponse = await fetch(targetUrl, {
                     method: 'POST',
                     headers,
@@ -451,6 +475,7 @@ router.post('/chat', async (req, res) => {
         }
 
         // No tools: original behavior
+        console.log('No tools active, using stream setting:', chatBody.stream);
         const response = await fetch(targetUrl, {
             method: 'POST',
             headers,
@@ -464,10 +489,12 @@ router.post('/chat', async (req, res) => {
         }
 
         if (chatBody.stream && response.body) {
+            console.log('Streaming response from upstream API');
             await pipeUpstreamToClient(response, res);
             return;
         }
 
+        console.log('Non-streaming response from upstream API');
         const data = await response.json();
         res.json(data);
     } catch (error) {

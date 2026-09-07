@@ -261,14 +261,16 @@ async function apiFetch(path, options = {}) {
 // --- Logging Helper ---
 async function logToServer(level, message, details = null) {
     try {
-        // Don't await strictly to avoid blocking UI
+        // Silently fail on logging errors to not affect user experience
         fetch(getApiUrl('/api/logs'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ level, message, details })
-        }).catch(e => console.error('Log upload failed', e));
+        }).catch(e => {
+            // Silently ignore logging errors - they're non-critical
+        });
     } catch (e) {
-        console.error('Log helper failed', e);
+        // Silently ignore all logging errors
     }
 }
 
