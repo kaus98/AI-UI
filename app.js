@@ -251,6 +251,26 @@ let searchQuery = '';
 
 // --- Proxy / API base helpers ---
 function getApiUrl(path) {
+    // Check if the path is a localhost URL and use CORS proxy for static sites
+    if (path.startsWith('http://localhost') || path.startsWith('http://127.0.0.1')) {
+        // For static sites, use the configured CORS proxy
+        const corsProxy = state.proxyBaseUrl || '';
+        if (corsProxy) {
+            // If using Cloudflare Worker pattern, it expects ?target= parameter
+            if (corsProxy.includes('workers.dev') || corsProxy.includes('pages.dev')) {
+                // Extract the endpoint path for OpenAI-compatible APIs
+                const url = new URL(path);
+                const endpointPath = url.pathname; // e.g., /v1/chat/completions
+                const baseUrl = url.origin; // e.g., http://localhost:11434
+                return `${corsProxy}${endpointPath}?target=${encodeURIComponent(baseUrl)}`;
+            }
+            // Standard proxy pattern
+            return corsProxy + path;
+        }
+        // If no proxy configured, try direct (will fail due to CORS)
+        console.warn('No CORS proxy configured for localhost requests. Set Proxy Base URL in settings.');
+        return path;
+    }
     const base = (state.proxyBaseUrl || '').replace(/\/+$/, '');
     return base ? `${base}${path}` : path;
 }
@@ -1883,6 +1903,16 @@ if (endpointsHeader) {
     if (endpointsContent) {
         endpointsContent.classList.add('open');
         endpointsHeader.setAttribute('aria-expanded', 'true');
+    }
+}
+
+// Expand Proxy section by default for localhost model support
+const proxyHeader = document.querySelector('.settings-section-header[data-target="proxy-section"]');
+if (proxyHeader) {
+    const proxyContent = document.getElementById('proxy-section');
+    if (proxyContent) {
+        proxyContent.classList.add('open');
+        proxyHeader.setAttribute('aria-expanded', 'true');
     }
 }
 

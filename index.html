@@ -363,10 +363,13 @@
 
                 <div class="settings-section">
                     <button class="settings-section-header" data-target="proxy-section">
-                        <h3>Cloudflare Proxy</h3>
+                        <h3>CORS Proxy (for localhost models)</h3>
                         <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     <div id="proxy-section" class="settings-section-content">
+                        <p style="font-size:0.75rem; color:var(--text-secondary); margin:0 0 0.5rem 0;">
+                            Configure a CORS proxy to access localhost models. Use your Cloudflare Worker URL or local proxy like http://localhost:8080/
+                        </p>
                         <div class="form-group">
                             <label>Proxy Base URL</label>
                             <input type="text" id="proxy-base-url" placeholder="https://aiui-proxy.YOUR_SUBDOMAIN.workers.dev">
