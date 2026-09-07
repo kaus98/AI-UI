@@ -8,7 +8,10 @@
  * Set environment variables in the Cloudflare dashboard or via `wrangler secret`:
  *   - ALLOWED_ORIGIN: your GitHub Pages URL, e.g. https://youruser.github.io
  *   - ALLOWED_HOSTS: comma-separated allowed upstream hostnames, e.g.
- *     api.groq.com,generativelanguage.googleapis.com,api.openai.com,api.nvidia.com
+ *     api.groq.com,generativelanguage.googleapis.com,api.openai.com,api.nvidia.com,*.ngrok.io,*.loca.lt
+ *
+ * For localhost models, use tunneling services like ngrok or localtunnel
+ * to expose your localhost to the internet, then use the tunnel URL as target.
  */
 
 export default {

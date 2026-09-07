@@ -5,4 +5,4 @@ compatibility_date = "2024-01-01"
 # Put your GitHub Pages / local origin here, or leave as "*" for testing only.
 [vars]
 ALLOWED_ORIGIN = "*"
-ALLOWED_HOSTS = "api.groq.com,generativelanguage.googleapis.com,api.openai.com,api.nvidia.com"
+ALLOWED_HOSTS = "api.groq.com,generativelanguage.googleapis.com,api.openai.com,api.nvidia.com,*.ngrok.io,*.loca.lt"
