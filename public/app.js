@@ -8,6 +8,7 @@ const themeToggleBtn = document.getElementById('theme-toggle-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const chatListDiv = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
+const incognitoChatBtn = document.getElementById('incognito-chat-btn');
 const menuBtn = document.getElementById('menu-btn');
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
@@ -24,6 +25,15 @@ let draftImages = []; // Array of base64 strings
 const settingsBtn = document.getElementById('settings-btn');
 const settingsModal = document.getElementById('settings-modal');
 const closeBtn = document.querySelector('.close-btn');
+
+// Comparison Elements
+const compareBtn = document.getElementById('compare-btn');
+const comparisonModal = document.getElementById('comparison-modal');
+const compareChat1 = document.getElementById('compare-chat-1');
+const compareChat2 = document.getElementById('compare-chat-2');
+const startCompareBtn = document.getElementById('start-compare-btn');
+const mergeBranchBtn = document.getElementById('merge-branch-btn');
+const comparisonResults = document.getElementById('comparison-results');
 const endpointSelect = document.getElementById('endpoint-select');
 const endpointsList = document.getElementById('endpoints-list');
 const addEndpointBtn = document.getElementById('add-endpoint-btn');
@@ -79,8 +89,21 @@ if (!crypto.randomUUID) {
 
 function renderChatList() {
     chatItems.innerHTML = '';
+    
+    // Add timeline class to chat list if in timeline view
+    if (currentFolder === 'Timeline') {
+        chatItems.classList.add('timeline-view');
+    } else {
+        chatItems.classList.remove('timeline-view');
+    }
+    
     const q = searchQuery.toLowerCase();
     const filtered = state.chats.filter(chat => {
+        // Timeline view: show branch relationships
+        if (currentFolder === 'Timeline') {
+            return chat.isBranch || chat.parentBranchId || state.chats.some(c => c.parentBranchId === chat.id);
+        }
+        
         const inFolder = currentFolder === 'All' || chat.folder === currentFolder || (currentFolder === DEFAULT_FOLDER && !chat.folder);
         if (!q) return inFolder;
         const hay = `${chat.title || ''} ${(chat.tags || []).join(' ')} ${chat.messages.map(m => getMessageText(m.content)).join(' ')}`.toLowerCase();
@@ -89,7 +112,7 @@ function renderChatList() {
 
     filtered.forEach(chat => {
         const div = document.createElement('div');
-        div.className = 'chat-item';
+        div.className = `chat-item${chat.isIncognito ? ' incognito-chat-item' : ''}`;
         if (chat.id === state.currentChatId) {
             div.classList.add('active');
         }
@@ -100,13 +123,26 @@ function renderChatList() {
         const dateStr = new Date(chat.timestamp).toLocaleString(undefined, {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
         });
+        
+        // Branch and privacy indicators
+        const branchIndicator = chat.isBranch ? '<span class="branch-indicator">🌿</span>' : '';
+        const incognitoIndicator = chat.isIncognito ? '<span class="incognito-indicator" title="This chat is not saved">Private</span>' : '';
+        
+        // Timeline visual indicators (always calculate but only show in Timeline view)
+        let timelineIndicator = '';
+        if (chat.parentBranchId) {
+            const parentChat = state.chats.find(c => c.id === chat.parentBranchId);
+            timelineIndicator = `<span class="timeline-child" title="Branch of: ${parentChat?.title || 'Unknown'}">└─</span>`;
+        } else if (state.chats.some(c => c.parentBranchId === chat.id)) {
+            timelineIndicator = `<span class="timeline-parent" title="Has branches">┬</span>`;
+        }
 
         const contentDiv = document.createElement('div');
         contentDiv.className = 'chat-content';
 
         const titleDiv = document.createElement('div');
         titleDiv.className = 'chat-title';
-        titleDiv.textContent = chat.title || 'New Chat';
+        titleDiv.innerHTML = `${timelineIndicator}${branchIndicator}${chat.title || 'New Chat'}${incognitoIndicator}`;
 
         const tagsDiv = document.createElement('div');
         tagsDiv.className = 'chat-item-tags';
@@ -138,9 +174,16 @@ function renderChatList() {
         delBtn.className = 'delete-chat-btn';
         delBtn.onclick = (e) => { e.stopPropagation(); deleteChat(chat.id); };
 
+        const folderBtn = document.createElement('button');
+        folderBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
+        folderBtn.className = 'folder-chat-btn';
+        folderBtn.title = 'Change folder';
+        folderBtn.onclick = (e) => { e.stopPropagation(); showFolderMenu(chat.id, folderBtn); };
+
         div.onclick = () => setCurrentChat(chat.id);
         div.appendChild(contentDiv);
         div.appendChild(pinBtn);
+        div.appendChild(folderBtn);
         div.appendChild(delBtn);
         chatItems.appendChild(div);
     });
@@ -493,10 +536,11 @@ async function fetchModels(forceRefresh = false) {
 
 async function saveChatState() {
     try {
+        const persistentChats = state.chats.filter(chat => !chat.isIncognito);
         await apiFetch('/api/history', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(state.chats)
+            body: JSON.stringify(persistentChats)
         });
     } catch (e) {
         console.error('Failed to save state:', e);
@@ -509,7 +553,7 @@ async function loadChatState() {
         const response = await apiFetch('/api/history');
         if (response.ok) {
             const data = await response.json();
-            state.chats = Array.isArray(data) ? data : [];
+            state.chats = Array.isArray(data) ? data.filter(chat => !chat.isIncognito) : [];
             state.chats.forEach(c => {
                 if (c.endpointId != null) c.endpointId = String(c.endpointId);
                 if (c.modelId != null) c.modelId = String(c.modelId);
@@ -524,7 +568,7 @@ async function loadChatState() {
 
 // --- Chat Logic ---
 
-async function createNewChat(presetId = null) {
+async function createNewChat(presetId = null, incognito = false) {
     presetId = presetId || state.currentPresetId || null;
     const id = Date.now().toString();
     let endpointId = state.currentEndpointId;
@@ -532,42 +576,214 @@ async function createNewChat(presetId = null) {
     let systemPrompt = '';
     let tags = [];
     let folder = DEFAULT_FOLDER;
-
+    
+    // Regular new chat
     if (presetId) {
         const preset = state.presets.find(p => p.id === presetId);
         if (preset) {
-            if (preset.endpointId && state.endpoints.find(e => e.id === preset.endpointId)) endpointId = preset.endpointId;
+            endpointId = preset.endpointId;
             modelId = preset.modelId || '';
             systemPrompt = preset.systemPrompt || '';
-            tags = (preset.tags || []).slice();
+            tags = preset.tags ? preset.tags.split(',').map(t => t.trim()) : [];
         }
     }
-
-    const ep = state.endpoints.find(e => e.id === endpointId);
-    if (ep) {
-        if (!modelId) modelId = ep.defaultModel || '';
-        if (!systemPrompt && ep.systemPrompt) systemPrompt = ep.systemPrompt;
-    }
-
+    
     const newChat = {
         id,
         title: 'New Chat',
-        folder,
-        tags,
         endpointId,
         modelId,
         systemPrompt,
         messages: [],
-        pinned: false,
-        timestamp: Date.now()
+        tags,
+        folder,
+        timestamp: Date.now(),
+        isIncognito: incognito
     };
+    
     state.chats.unshift(newChat);
-    await saveChatState();
+    state.currentChatId = id;
+    if (!incognito) await saveChatState();
+    renderChatList();
+    renderMessages();
     return id;
+}
+
+async function createIncognitoChat() {
+    const id = await createNewChat(null, true);
+    const chat = getCurrentChat();
+    if (chat) {
+        chat.title = 'Incognito Chat';
+        chat.folder = DEFAULT_FOLDER;
+    }
+    renderChatList();
+    await setCurrentChat(id);
+    showSuccess('Incognito chat started. It will not be saved.');
+    return id;
+}
+
+async function createBranchFromPoint(chat, msgIndex) {
+    try {
+        const branchName = prompt('Enter a name for this branch:', `Branch from message ${msgIndex + 1}`);
+        if (!branchName) return;
+        
+        // Create branch directly without using createNewChat to avoid parameter issues
+        const id = Date.now().toString();
+        const branchMessages = chat.messages.slice(0, msgIndex + 1);
+        
+        const newChat = {
+            id,
+            title: branchName,
+            endpointId: chat.endpointId,
+            modelId: chat.modelId,
+            systemPrompt: chat.systemPrompt || '',
+            messages: branchMessages,
+            tags: [...(chat.tags || [])],
+            folder: chat.folder || DEFAULT_FOLDER,
+            timestamp: Date.now(),
+            parentBranchId: chat.id,
+            branchPoint: msgIndex,
+            isBranch: true,
+            isIncognito: !!chat.isIncognito
+        };
+        
+        state.chats.push(newChat);
+        state.currentChatId = id;
+        await saveChatState();
+        renderChatList();
+        renderMessages();
+        updateCompareButtonVisibility();
+        
+        showSuccess('Branch created successfully');
+    } catch (e) {
+        console.error('Failed to create branch:', e);
+        showError('Failed to create branch: ' + e.message);
+    }
 }
 
 function getCurrentChat() {
     return state.chats.find(c => c.id === state.currentChatId);
+}
+
+function updateCompareButtonVisibility() {
+    const hasBranches = state.chats.some(c => c.isBranch || c.parentBranchId);
+    compareBtn.style.display = hasBranches ? 'flex' : 'none';
+}
+
+async function mergeBranch(sourceChatId, targetChatId) {
+    try {
+        const sourceChat = state.chats.find(c => c.id === sourceChatId);
+        const targetChat = state.chats.find(c => c.id === targetChatId);
+        
+        if (!sourceChat || !targetChat) {
+            showError('One or more conversations not found');
+            return;
+        }
+        
+        if (!confirm(`Merge "${sourceChat.title}" into "${targetChat.title}"? This will append all messages from the source to the target.`)) {
+            return;
+        }
+        
+        // Append messages from source to target
+        targetChat.messages = [...targetChat.messages, ...sourceChat.messages];
+        
+        // Update metadata
+        targetChat.timestamp = Date.now();
+        targetChat.mergedFrom = sourceChatId;
+        
+        // Remove source chat
+        state.chats = state.chats.filter(c => c.id !== sourceChatId);
+        
+        if (state.currentChatId === sourceChatId) {
+            state.currentChatId = targetChatId;
+        }
+        
+        await saveChatState();
+        renderChatList();
+        renderMessages();
+        updateCompareButtonVisibility();
+        
+        showSuccess('Branch merged successfully');
+    } catch (e) {
+        console.error('Failed to merge branch:', e);
+        showError('Failed to merge branch: ' + e.message);
+    }
+}
+
+function populateComparisonSelects() {
+    compareChat1.innerHTML = '<option value="">Select conversation</option>';
+    compareChat2.innerHTML = '<option value="">Select conversation</option>';
+    
+    state.chats.forEach(chat => {
+        const option = document.createElement('option');
+        option.value = chat.id;
+        option.textContent = chat.title || 'New Chat';
+        
+        const option1 = option.cloneNode(true);
+        const option2 = option.cloneNode(true);
+        
+        compareChat1.appendChild(option1);
+        compareChat2.appendChild(option2);
+    });
+}
+
+function startComparison() {
+    const chat1Id = compareChat1.value;
+    const chat2Id = compareChat2.value;
+    
+    if (!chat1Id || !chat2Id || chat1Id === chat2Id) {
+        showError('Please select two different conversations to compare');
+        return;
+    }
+    
+    const chat1 = state.chats.find(c => c.id === chat1Id);
+    const chat2 = state.chats.find(c => c.id === chat2Id);
+    
+    if (!chat1 || !chat2) {
+        showError('One or more conversations not found');
+        return;
+    }
+    
+    // Show merge button if one is a branch
+    const isBranchRelationship = (chat1.isBranch || chat1.parentBranchId) || (chat2.isBranch || chat2.parentBranchId);
+    mergeBranchBtn.style.display = isBranchRelationship ? 'inline-block' : 'none';
+    
+    // Display comparison
+    document.getElementById('comparison-title-1').textContent = chat1.title || 'Conversation 1';
+    document.getElementById('comparison-title-2').textContent = chat2.title || 'Conversation 2';
+    
+    const content1 = document.getElementById('comparison-content-1');
+    const content2 = document.getElementById('comparison-content-2');
+    
+    content1.innerHTML = '';
+    content2.innerHTML = '';
+    
+    // Render messages for each conversation (simplified version)
+    chat1.messages.forEach((msg) => {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message ${msg.role === 'user' ? 'user' : 'ai'}`;
+        const role = msg.role === 'user' ? 'User' : 'AI';
+        const htmlContent = Array.isArray(msg.content) 
+            ? msg.content.map(part => part.type === 'text' ? parseMarkdownWithMath(part.text) : `<img src="${part.image_url.url}" style="max-width: 100%; border-radius: 8px;">`).join('')
+            : parseMarkdownWithMath(msg.content || '');
+        
+        msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-body">${htmlContent}</div></div>`;
+        content1.appendChild(msgDiv);
+    });
+    
+    chat2.messages.forEach((msg) => {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message ${msg.role === 'user' ? 'user' : 'ai'}`;
+        const role = msg.role === 'user' ? 'User' : 'AI';
+        const htmlContent = Array.isArray(msg.content) 
+            ? msg.content.map(part => part.type === 'text' ? parseMarkdownWithMath(part.text) : `<img src="${part.image_url.url}" style="max-width: 100%; border-radius: 8px;">`).join('')
+            : parseMarkdownWithMath(msg.content || '');
+        
+        msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-body">${htmlContent}</div></div>`;
+        content2.appendChild(msgDiv);
+    });
+    
+    comparisonResults.classList.remove('hidden');
 }
 
 async function setCurrentChat(id) {
@@ -612,13 +828,68 @@ async function setCurrentChat(id) {
 
     renderChatList();
     renderMessages();
+    const composerInput = getComposerInput();
+    if (composerInput) {
+        composerInput.placeholder = chat?.isIncognito ? 'Private message — this chat is not saved' : 'Message your AI...';
+    }
+    activateComposer({ focus: true });
     if (window.innerWidth <= 768) sidebar.classList.remove('open');
 }
 
+async function generateChatTitle(chat) {
+    if (chat.titleGenerating || chat.isIncognito) return;
+    try {
+        const firstUserMessage = chat.messages.find(m => m.role === 'user');
+        if (!firstUserMessage) return;
+
+        const messageText = getMessageText(firstUserMessage.content);
+        if (!messageText || messageText.length < 10) return;
+
+        const endpointId = chat.endpointId || state.currentEndpointId;
+        const ep = state.endpoints.find(e => e.id === endpointId);
+        const model = chat.modelId || ep?.defaultModel || modelSelect.value;
+        if (!endpointId || !model) return;
+
+        chat.titleGenerating = true;
+        const titlePrompt = `Generate a short, concise title of no more than 5 words for this conversation. Return only the title, with no quotes, explanation, or punctuation.
+
+First message: "${messageText.substring(0, 500)}"`;
+        const response = await apiFetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                endpointId,
+                model,
+                messages: [{ role: 'user', content: titlePrompt }],
+                temperature: 0.3,
+                stream: false,
+                activeTools: []
+            })
+        });
+
+        if (!response.ok) return;
+        const data = await response.json();
+        const rawTitle = data.choices?.[0]?.message?.content;
+        const generatedTitle = typeof rawTitle === 'string'
+            ? rawTitle.trim().replace(/^["']|["']$/g, '').replace(/[.!?]+$/, '').substring(0, 50)
+            : '';
+
+        if (generatedTitle.length > 2) {
+            chat.title = generatedTitle;
+            await saveChatState();
+            renderChatList();
+        }
+    } catch (e) {
+        console.warn('Failed to generate chat title:', e);
+    } finally {
+        delete chat.titleGenerating;
+    }
+}
+
 function updateChatTitle(chat, firstMessage) {
+    // Use AI to generate a meaningful title
     if (!chat.title || chat.title === 'New Chat') {
-        chat.title = firstMessage.length > 30 ? firstMessage.substring(0, 30) + '...' : firstMessage;
-        renderChatList();
+        generateChatTitle(chat);
     }
 }
 
@@ -655,6 +926,59 @@ window.togglePinChat = async (id) => {
     await saveChatState();
     renderChatList();
 };
+
+async function changeChatFolder(chatId, newFolder) {
+    const chat = state.chats.find(c => c.id === chatId);
+    if (!chat) return;
+    chat.folder = newFolder;
+    await saveChatState();
+    renderChatList();
+    showSuccess(`Chat moved to ${newFolder}`);
+}
+
+function showFolderMenu(chatId, triggerBtn) {
+    const chat = state.chats.find(c => c.id === chatId);
+    if (!chat) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'folder-menu';
+    menu.innerHTML = `
+        <div class="folder-menu-header">Move to folder</div>
+        <div class="folder-menu-items">
+            <button data-folder="General" class="folder-menu-item">General</button>
+            <button data-folder="Work" class="folder-menu-item">Work</button>
+            <button data-folder="Personal" class="folder-menu-item">Personal</button>
+            <button data-folder="Archive" class="folder-menu-item">Archive</button>
+        </div>
+    `;
+
+    const rect = triggerBtn.getBoundingClientRect();
+    menu.style.position = 'absolute';
+    menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.right = `${window.innerWidth - rect.right}px`;
+    menu.style.zIndex = '1000';
+
+    document.body.appendChild(menu);
+
+    menu.querySelectorAll('.folder-menu-item').forEach(item => {
+        if (item.dataset.folder === chat.folder) {
+            item.classList.add('active');
+        }
+        item.addEventListener('click', () => {
+            changeChatFolder(chatId, item.dataset.folder);
+            menu.remove();
+        });
+    });
+
+    const closeMenu = (e) => {
+        if (!menu.contains(e.target) && e.target !== triggerBtn) {
+            menu.remove();
+            document.removeEventListener('click', closeMenu);
+        }
+    };
+
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
 
 function renderMessages() {
     chatContainer.innerHTML = '';
@@ -795,6 +1119,101 @@ try {
     console.error('Failed to configure marked', e);
 }
 
+// Simple math rendering using KaTeX renderToString with HTML-only output
+function renderMath(text, mathHtml) {
+    if (typeof katex === 'undefined') return text;
+
+    const render = (content, displayMode) => {
+        try {
+            const html = katex.renderToString(content, {
+                displayMode,
+                throwOnError: false,
+                output: 'html'
+            });
+            const index = mathHtml.push(html) - 1;
+            return `MATH_PLACEHOLDER_${index}_END`;
+        } catch (e) {
+            return content;
+        }
+    };
+
+    return text
+        .replace(/\$\$([^$]+)\$\$/g, (_, content) => render(content, true))
+        .replace(/\$([^$]+)\$/g, (_, content) => render(content, false))
+        .replace(/\\\(([^)]+)\\\)/g, (_, content) => render(content, false))
+        .replace(/\\\[([^]]+)\\\]/g, (_, content) => render(content, true));
+}
+
+function parseMarkdownWithMath(content) {
+    const mathHtml = [];
+    const mathRendered = renderMath(content || '', mathHtml);
+
+    // Parse markdown while protecting KaTeX HTML from being escaped.
+    let html = marked.parse(mathRendered);
+    mathHtml.forEach((math, index) => {
+        html = html.replace(`MATH_PLACEHOLDER_${index}_END`, math);
+    });
+    return html;
+}
+
+function enhanceCodeBlocks(container) {
+    container.querySelectorAll('pre').forEach(pre => {
+        if (pre.parentElement?.classList.contains('code-block')) return;
+        const codeEl = pre.querySelector('code');
+        const lang = (codeEl?.className.match(/language-(\S+)/) || [])[1] || 'text';
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'code-block';
+        wrapper.innerHTML = `<div class="code-block-header"><span class="code-block-lang"></span><button type="button" class="code-copy-btn" title="Copy code"><i class="fa-regular fa-copy"></i><span>Copy</span></button></div>`;
+        wrapper.querySelector('.code-block-lang').textContent = lang;
+
+        pre.parentNode.insertBefore(wrapper, pre);
+        wrapper.appendChild(pre);
+
+        const btn = wrapper.querySelector('.code-copy-btn');
+        btn.addEventListener('click', () => {
+            navigator.clipboard.writeText(codeEl ? codeEl.textContent : pre.textContent).then(() => {
+                btn.classList.add('copied');
+                btn.innerHTML = '<i class="fa-solid fa-check"></i><span>Copied</span>';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.innerHTML = '<i class="fa-regular fa-copy"></i><span>Copy</span>';
+                }, 1500);
+            });
+        });
+    });
+}
+
+function addFadeInEffects(container) {
+    enhanceCodeBlocks(container);
+
+    // Add fade-in effect to code blocks
+    const codeBlocks = container.querySelectorAll('pre');
+    codeBlocks.forEach((block, index) => {
+        block.style.opacity = '0';
+        block.style.transform = 'translateY(10px)';
+        block.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+        
+        setTimeout(() => {
+            block.style.opacity = '1';
+            block.style.transform = 'translateY(0)';
+        }, 100 + (index * 100));
+    });
+
+    // Add fade-in effect to images
+    const images = container.querySelectorAll('img');
+    images.forEach((img, index) => {
+        img.style.opacity = '0';
+        img.style.transform = 'scale(0.95)';
+        img.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+        
+        setTimeout(() => {
+            img.style.opacity = '1';
+            img.style.transform = 'scale(1)';
+        }, 200 + (index * 100));
+    });
+}
+
 function appendMessageDiv(role, content, type, preRendered = null, chat = null, msgIndex = -1, timestamp = null) {
     const welcome = document.querySelector('.welcome-message');
     if (welcome) welcome.remove();
@@ -803,6 +1222,7 @@ function appendMessageDiv(role, content, type, preRendered = null, chat = null, 
     if (timestamp) msgDiv.dataset.timestamp = timestamp;
 
     let htmlContent = '';
+    let reasoningHtml = '';
 
     if (preRendered) {
         htmlContent = preRendered;
@@ -810,25 +1230,38 @@ function appendMessageDiv(role, content, type, preRendered = null, chat = null, 
         // Handle array content (Text + Images)
         content.forEach(part => {
             if (part.type === 'text') {
-                htmlContent += marked.parse(part.text);
+                htmlContent += parseMarkdownWithMath(part.text);
             } else if (part.type === 'image_url') {
                 htmlContent += `<img src="${part.image_url.url}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; display: block;">`;
             }
         });
     } else {
         // Handle legacy string content
-        htmlContent = marked.parse(content || '');
+        htmlContent = parseMarkdownWithMath(content || '');
+    }
+    
+    // Handle reasoning content from message metadata
+    if (chat && msgIndex >= 0 && chat.messages[msgIndex] && chat.messages[msgIndex].reasoning_content) {
+        const reasoningContent = chat.messages[msgIndex].reasoning_content;
+        reasoningHtml = parseMarkdownWithMath(reasoningContent);
     }
 
     const isUser = type === 'user';
     const extraActions = isUser
         ? `<button class="msg-action-btn msg-edit-btn" title="Edit"><i class="fa-solid fa-pen"></i></button>`
         : `<button class="msg-action-btn msg-regenerate-btn" title="Regenerate"><i class="fa-solid fa-rotate-right"></i></button>`;
+    
+    // Add branch button for all messages if chat exists
+    const branchAction = chat && msgIndex >= 0 
+        ? `<button class="msg-action-btn msg-branch-btn" title="Branch from here"><i class="fa-solid fa-code-branch"></i></button>`
+        : '';
+    
+    const allActions = `${extraActions}${branchAction}<button class="msg-action-btn msg-copy-btn" title="Copy"><i class="fa-regular fa-copy"></i></button><button class="msg-action-btn msg-collapse-btn" title="Collapse"><i class="fa-solid fa-chevron-up"></i></button>`;
     const timeHtml = timestamp ? `<div class="message-time">${formatTimestamp(timestamp)}</div>` : '';
     const usage = (chat && msgIndex >= 0 && chat.messages[msgIndex]?.usage) ? chat.messages[msgIndex].usage : null;
     const usageHtml = (usage && !isUser) ? `<div class="msg-usage">${usage.totalTokens.toLocaleString()} tokens · $${usage.totalCost.toFixed(4)}</div>` : '';
 
-    msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-actions">${extraActions}<button class="msg-action-btn msg-copy-btn" title="Copy"><i class="fa-regular fa-copy"></i></button><button class="msg-action-btn msg-collapse-btn" title="Collapse"><i class="fa-solid fa-chevron-up"></i></button></div><div class="msg-body">${htmlContent}</div>${timeHtml}${usageHtml}</div>`;
+    msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-actions">${allActions}</div>${reasoningHtml ? `<details class="reasoning-content" style="margin-bottom:0.75rem;color:var(--text-secondary);font-size:0.9em;font-style:italic;border-left:2px solid var(--border-color);padding-left:0.75rem;"><summary>Thinking</summary><div class="reasoning-body">${reasoningHtml}</div></details>` : ''}<div class="msg-body">${htmlContent}</div>${timeHtml}${usageHtml}</div>`;
 
     // Wire up copy button
     const copyBtn = msgDiv.querySelector('.msg-copy-btn');
@@ -864,6 +1297,20 @@ function appendMessageDiv(role, content, type, preRendered = null, chat = null, 
     // Wire up regenerate assistant message
     if (!isUser && chat && msgIndex >= 0) {
         msgDiv.querySelector('.msg-regenerate-btn').addEventListener('click', () => regenerateAssistantMessage(chat, msgIndex, msgDiv));
+    }
+    
+    // Wire up branch button
+    if (chat && msgIndex >= 0) {
+        msgDiv.querySelector('.msg-branch-btn').addEventListener('click', () => createBranchFromPoint(chat, msgIndex));
+    }
+    
+    // Show compare button if there are branches
+    updateCompareButtonVisibility();
+
+    // Add fade-in effects for rendered content
+    if (!preRendered) {
+        const msgBody = msgDiv.querySelector('.msg-body');
+        addFadeInEffects(msgBody);
     }
 
     chatContainer.appendChild(msgDiv);
@@ -1128,6 +1575,12 @@ function getMessageText(content) {
     return String(content);
 }
 
+function estimateTokens(text) {
+    if (!text) return 0;
+    // Rough estimate: ~4 characters per token for English text
+    return Math.ceil(text.length / 4);
+}
+
 function editUserMessage(chat, msgIndex, msgDiv) {
     const body = msgDiv.querySelector('.msg-body');
     const original = getMessageText(chat.messages[msgIndex].content);
@@ -1135,7 +1588,7 @@ function editUserMessage(chat, msgIndex, msgDiv) {
 
     const ta = document.createElement('textarea');
     ta.className = 'edit-textarea';
-    ta.style.cssText = 'width:100%;min-height:60px;padding:8px;border-radius:6px;border:1px solid var(--border-color);background:var(--card-bg);color:var(--text-primary);resize:vertical;';
+    ta.style.cssText = 'width:100%;min-height:60px;padding:8px;border-radius:6px;border:1px solid var(--border-color);background:var(--card-bg);color:var(--text-primary);resize:vertical;font-size:16px;';
     ta.value = original;
 
     const btnRow = document.createElement('div');
@@ -1148,14 +1601,27 @@ function editUserMessage(chat, msgIndex, msgDiv) {
 
     const saveBtn = document.createElement('button');
     saveBtn.className = 'primary-btn save-edit';
-    saveBtn.textContent = 'Save';
+    saveBtn.textContent = 'Save & Regenerate';
     saveBtn.addEventListener('click', async () => {
         const newText = ta.value.trim();
         if (!newText) return;
+        
+        // Update the message
         chat.messages[msgIndex].content = newText;
+        
+        // Remove all messages after this one (including AI response)
         chat.messages.splice(msgIndex + 1);
+        
+        // Update title if this is the first message
+        if (msgIndex === 0) {
+            updateChatTitle(chat, newText);
+        }
+        
         await saveChatState();
         renderMessages();
+        
+        // Regenerate AI response
+        await generateAssistantResponse(chat);
     });
 
     btnRow.append(cancelBtn, saveBtn);
@@ -1205,6 +1671,18 @@ async function generateAssistantResponse(chat) {
         if (hasReceivedData) return;
         aiBodyDiv.innerHTML = '';
 
+        // Add progress indicator initially
+        const progressIndicator = document.createElement('div');
+        progressIndicator.className = 'streaming-progress';
+        progressIndicator.id = 'streaming-progress';
+        progressIndicator.innerHTML = `
+            <div class="progress-bar">
+                <div class="progress-fill"></div>
+            </div>
+            <div class="progress-text">Generating response...</div>
+        `;
+        aiBodyDiv.appendChild(progressIndicator);
+
         // Reasoning / thinking panel
         reasoningEl = document.createElement('details');
         reasoningEl.className = 'reasoning-content';
@@ -1250,21 +1728,60 @@ async function generateAssistantResponse(chat) {
         answerBuffer += text;
         if (answerEl) {
             answerEl.textContent = answerBuffer;
+            
+            // Remove progress indicator once content starts appearing
+            const progressIndicator = aiBodyDiv.querySelector('#streaming-progress');
+            if (progressIndicator && answerBuffer.length > 0) {
+                progressIndicator.remove();
+            }
+            
             scrollToBottom();
         }
     }
 
-    function finalizeDisplay(usageData = null) {
+    function finalizeDisplay(formattingData = null) {
         const finalContent = answerBuffer || reasoningBuffer || '';
         if (!finalContent) {
             aiMsgDiv.remove();
             return;
         }
-        aiBodyDiv.innerHTML = marked.parse(finalContent);
+        
+        // Preserve reasoning panel if it exists and has content
+        if (reasoningEl && reasoningBuffer) {
+            // Keep the reasoning panel visible and formatted
+            const reasoningBody = reasoningEl.querySelector('.reasoning-body');
+            if (reasoningBody) {
+                reasoningBody.innerHTML = parseMarkdownWithMath(reasoningBuffer);
+                const summary = reasoningEl.querySelector('summary');
+                if (summary) {
+                    summary.textContent = `Thinking (${estimateTokens(reasoningBuffer)} tokens) - Click to expand/collapse`;
+                }
+                // Auto-expand reasoning panel to show the thinking process
+                reasoningEl.open = true;
+            }
+        }
+        
+        // Apply markdown formatting to the main answer
+        if (answerEl) {
+            answerEl.innerHTML = parseMarkdownWithMath(answerBuffer);
+            addFadeInEffects(answerEl);
+        } else if (!reasoningEl || !reasoningBuffer) {
+            // If no reasoning, just format the content directly
+            aiBodyDiv.innerHTML = parseMarkdownWithMath(finalContent);
+            addFadeInEffects(aiBodyDiv);
+        }
 
         const assistantIndex = chat.messages.length;
-        const usage = calculateUsageCost(usageData, ep, chat.messages, finalContent);
-        const msg = { role: 'assistant', content: finalContent, createdAt: assistantCreatedAt, usage };
+        const usage = calculateUsageCost(formattingData, ep, chat.messages, finalContent);
+        
+        // Save both reasoning and answer content separately
+        const msg = { 
+            role: 'assistant', 
+            content: answerBuffer || finalContent, 
+            reasoning_content: reasoningBuffer || null,
+            createdAt: assistantCreatedAt, 
+            usage 
+        };
         chat.messages.push(msg);
 
         const usageFooter = document.createElement('div');
@@ -1318,7 +1835,22 @@ async function generateAssistantResponse(chat) {
             answerBuffer = message.content || '';
             reasoningBuffer = message.reasoning_content || message.reasoning || '';
             usage = data.usage || null;
-            finalizeDisplay(usage);
+            
+            // For non-streaming, we need to create the reasoning panel first
+            if (reasoningBuffer) {
+                ensureStreamingContainer();
+                const reasoningBody = reasoningEl.querySelector('.reasoning-body');
+                if (reasoningBody) {
+                    reasoningBody.textContent = reasoningBuffer;
+                    const summary = reasoningEl.querySelector('summary');
+                    if (summary) {
+                        summary.textContent = `Thinking (${estimateTokens(reasoningBuffer)} tokens)`;
+                    }
+                    reasoningEl.open = true;
+                }
+            }
+            
+            finalizeDisplay(data);
             await saveChatState();
             statusIndicator.style.backgroundColor = '#0e7a0d';
             statusIndicator.title = 'Connected';
@@ -1380,7 +1912,7 @@ async function generateAssistantResponse(chat) {
         if (error.name === 'AbortError') {
             logToServer('INFO', 'Stream aborted by user', { len: answerBuffer.length || reasoningBuffer.length });
             if (answerBuffer || reasoningBuffer) {
-                finalizeDisplay();
+                finalizeDisplay(usage);
                 await saveChatState();
             } else if (aiMsgDiv) {
                 aiMsgDiv.remove();
@@ -1456,14 +1988,14 @@ async function sendMessage() {
 
         // Construct UI content (append images to bottom)
         const imagesHtml = draftImages.map(img => `<img src="${img}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; display: block;">`).join('');
-        uiContent = `${marked.parse(text)}<div class="message-images">${imagesHtml}</div>`;
+        uiContent = `${parseMarkdownWithMath(text)}<div class="message-images">${imagesHtml}</div>`;
 
         // Clear drafts
         draftImages = [];
         renderImagePreviews();
     } else {
         // Just text, keep as string or wrap in array if preferred (keeping string for broad compatibility if no images)
-        uiContent = marked.parse(text);
+        uiContent = parseMarkdownWithMath(text);
     }
 
     // appendMessageDiv handles raw HTML for user messages now if we pass specific flag or just use content
@@ -1645,7 +2177,7 @@ function applyPreset(presetId) {
 
 // --- Export / Import Chats ---
 function exportChats() {
-    const data = JSON.stringify(state.chats, null, 2);
+    const data = JSON.stringify(state.chats.filter(chat => !chat.isIncognito), null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1689,70 +2221,183 @@ async function importChats(file) {
 // userInput auto-resize and Enter logic replaced by EasyMDE keymaps
 
 // Setup EasyMDE
+function getComposerInput() {
+    return document.getElementById('user-input');
+}
+
 function getInputText() {
+    const input = getComposerInput();
     if (window.easyMDE) return window.easyMDE.value();
-    return userInput ? userInput.value : '';
+    return input ? input.value : '';
 }
 
 function clearInput() {
+    const input = getComposerInput();
     if (window.easyMDE) {
         window.easyMDE.value('');
-    } else if (userInput) {
-        userInput.value = '';
+    } else if (input) {
+        input.value = '';
+        input.style.height = 'auto';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
     }
 }
 
+function activateComposer({ focus = false } = {}) {
+    const input = getComposerInput();
+    if (!input) return;
+    input.disabled = false;
+    input.removeAttribute('readonly');
+    sendBtn.disabled = getInputText().trim() === '';
+    if (focus) requestAnimationFrame(() => input.focus());
+}
+
 function initEasyMDE() {
-    window.easyMDE = new EasyMDE({
-        element: document.getElementById('user-input'),
-        autoDownloadFontAwesome: true, // Needed for icons
-        status: false,
-        spellChecker: false,
-        toolbar: false,
-        forceSync: true,
-        placeholder: "Message AI...",
-        minHeight: "0px",
-        maxHeight: "120px",
-        shortcuts: {
-            "togglePreview": null, // Keep preview button but maybe disable shortcut if it conflicts
-        },
-    });
-
-    // Force compact CodeMirror height
-    window.easyMDE.codemirror.setSize('100%', 'auto');
-    const cm = window.easyMDE.codemirror.getWrapperElement();
-    if (cm) {
-        cm.style.height = 'auto';
-        cm.style.minHeight = '0px';
-        cm.style.maxHeight = '120px';
-    }
-    window.easyMDE.codemirror.refresh();
-
-    // Custom Key Handler for Enter to Send
-    window.easyMDE.codemirror.setOption("extraKeys", {
-        "Enter": function (cm) {
-            sendMessage();
-        },
-        "Shift-Enter": function (cm) {
-            cm.replaceSelection("\n");
+    try {
+        // Always use simple textarea for better reliability
+        console.log('Using simple textarea instead of EasyMDE');
+        setupSimpleTextarea();
+        return;
+        
+        if (typeof EasyMDE === 'undefined') {
+            console.warn('EasyMDE not loaded, falling back to simple textarea');
+            setupSimpleTextarea();
+            return;
         }
-    });
 
-    // Update Send Button state on input
-    window.easyMDE.codemirror.on("change", () => {
-        const val = window.easyMDE.value().trim();
-        sendBtn.disabled = val === '';
-    });
+        window.easyMDE = new EasyMDE({
+            element: document.getElementById('user-input'),
+            autoDownloadFontAwesome: true, // Needed for icons
+            status: false,
+            spellChecker: false,
+            toolbar: false,
+            forceSync: true,
+            placeholder: "Message AI...",
+            minHeight: "0px",
+            maxHeight: "120px",
+            shortcuts: {
+                "togglePreview": null, // Keep preview button but maybe disable shortcut if it conflicts
+            },
+        });
+
+        // Force compact CodeMirror height
+        window.easyMDE.codemirror.setSize('100%', 'auto');
+        const cm = window.easyMDE.codemirror.getWrapperElement();
+        if (cm) {
+            cm.style.height = 'auto';
+            cm.style.minHeight = '0px';
+            cm.style.maxHeight = '120px';
+        }
+        window.easyMDE.codemirror.refresh();
+
+        // Custom Key Handler for Enter to Send
+        window.easyMDE.codemirror.setOption("extraKeys", {
+            "Enter": function (cm) {
+                sendMessage();
+            },
+            "Shift-Enter": function (cm) {
+                cm.replaceSelection("\n");
+            }
+        });
+
+        // Update Send Button state on input
+        window.easyMDE.codemirror.on("change", () => {
+            const val = window.easyMDE.value().trim();
+            sendBtn.disabled = val === '';
+        });
+    } catch (e) {
+        console.error('EasyMDE initialization failed:', e);
+        setupSimpleTextarea();
+    }
+}
+
+function setupSimpleTextarea() {
+    // Fallback to simple textarea if EasyMDE fails
+    const textarea = document.getElementById('user-input');
+    if (!textarea) {
+        console.error('user-input textarea not found');
+        return;
+    }
+    
+    // Remove EasyMDE wrapper if it exists
+    const easymdeWrapper = document.querySelector('.EasyMDEContainer');
+    if (easymdeWrapper) {
+        easymdeWrapper.remove();
+        // Recreate the textarea
+        const newTextarea = document.createElement('textarea');
+        newTextarea.id = 'user-input';
+        newTextarea.placeholder = 'Message AI...';
+        newTextarea.rows = 1;
+        newTextarea.ariaLabel = 'Message input';
+        const inputRow = document.querySelector('.input-row');
+        if (inputRow) {
+            inputRow.insertBefore(newTextarea, inputRow.firstChild);
+        }
+    }
+    
+    // Add event listeners for simple textarea
+    const simpleInput = document.getElementById('user-input');
+    if (simpleInput) {
+        if (simpleInput.dataset.composerBound === 'true') {
+            activateComposer();
+            return;
+        }
+
+        console.log('Setting up simple textarea listeners');
+        simpleInput.dataset.composerBound = 'true';
+        const charCount = document.getElementById('input-char-count');
+        const maxLength = Number(simpleInput.maxLength) || 12000;
+
+        const resizeInput = () => {
+            const maxHeight = parseFloat(getComputedStyle(simpleInput).maxHeight) || 240;
+            simpleInput.style.height = 'auto';
+            simpleInput.style.height = `${Math.min(simpleInput.scrollHeight, maxHeight)}px`;
+        };
+
+        const updateInputState = () => {
+            const value = simpleInput.value;
+            const trimmedValue = value.trim();
+            sendBtn.disabled = trimmedValue === '';
+            resizeInput();
+
+            if (charCount) {
+                charCount.textContent = `${value.length.toLocaleString()} / ${maxLength.toLocaleString()}`;
+                charCount.classList.toggle('near-limit', value.length >= maxLength * 0.9);
+                charCount.classList.toggle('at-limit', value.length >= maxLength);
+            }
+        };
+
+        simpleInput.addEventListener('input', updateInputState);
+        window.addEventListener('resize', resizeInput, { passive: true });
+        
+        // Keyboard handling
+        simpleInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        // Ensure textarea is editable
+        simpleInput.removeAttribute('readonly');
+        simpleInput.disabled = false;
+        
+        // Initial state and responsive resize
+        updateInputState();
+    }
 }
 
 // Global listeners
 sendBtn.addEventListener('click', sendMessage);
-userInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
+document.querySelectorAll('.prompt-card').forEach(card => {
+    card.addEventListener('click', () => {
+        const input = getComposerInput();
+        if (!input) return;
+        input.value = card.dataset.prompt || '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        activateComposer({ focus: true });
+    });
 });
+// Note: EasyMDE handles Enter key via its extraKeys configuration
 
 document.addEventListener('keydown', (e) => {
     // Ctrl/Cmd + Enter to send
@@ -1779,6 +2424,11 @@ newChatBtn.addEventListener('click', async () => {
     const id = await createNewChat();
     await setCurrentChat(id);
 });
+
+incognitoChatBtn.addEventListener('click', async () => {
+    await createIncognitoChat();
+});
+
 menuBtn.addEventListener('click', () => {
     sidebar.classList.toggle('open');
     sidebarOverlay.classList.toggle('active');
@@ -1828,7 +2478,73 @@ settingsBtn.addEventListener('click', () => {
     document.getElementById('search-engine-select').value = state.searchEngine || 'auto';
 });
 closeBtn.addEventListener('click', () => settingsModal.style.display = 'none');
-window.onclick = (e) => { if (e.target === settingsModal) settingsModal.style.display = 'none'; };
+
+// Comparison modal close button
+if (comparisonModal) {
+    const comparisonCloseBtn = comparisonModal.querySelector('.close-btn');
+    if (comparisonCloseBtn) {
+        comparisonCloseBtn.addEventListener('click', () => {
+            comparisonModal.style.display = 'none';
+        });
+    }
+}
+
+// Comparison modal event listeners
+if (compareBtn) {
+    compareBtn.addEventListener('click', () => {
+        populateComparisonSelects();
+        comparisonResults.classList.add('hidden');
+        if (comparisonModal) comparisonModal.style.display = 'block';
+    });
+}
+
+// Handle backdrop clicks for both modals
+window.onclick = (e) => { 
+    if (e.target === settingsModal) settingsModal.style.display = 'none';
+    if (comparisonModal && e.target === comparisonModal) comparisonModal.style.display = 'none';
+};
+
+if (startCompareBtn) {
+    startCompareBtn.addEventListener('click', startComparison);
+}
+
+if (mergeBranchBtn) {
+    mergeBranchBtn.addEventListener('click', () => {
+        const chat1Id = compareChat1.value;
+        const chat2Id = compareChat2.value;
+        
+        if (!chat1Id || !chat2Id || chat1Id === chat2Id) {
+            showError('Please select two different conversations to merge');
+            return;
+        }
+        
+        // Determine which is the branch (has parentBranchId or isBranch)
+        const chat1 = state.chats.find(c => c.id === chat1Id);
+        const chat2 = state.chats.find(c => c.id === chat2Id);
+        
+        let sourceChat, targetChat;
+        if (chat1.isBranch || chat1.parentBranchId) {
+            sourceChat = chat1;
+            targetChat = chat2;
+        } else if (chat2.isBranch || chat2.parentBranchId) {
+            sourceChat = chat2;
+            targetChat = chat1;
+        } else {
+            // Neither is a branch, ask user which to merge
+            const choice = confirm(`Merge "${chat1.title}" into "${chat2.title}"?`);
+            if (choice) {
+                sourceChat = chat1;
+                targetChat = chat2;
+            } else {
+                sourceChat = chat2;
+                targetChat = chat1;
+            }
+        }
+        
+        mergeBranch(sourceChat.id, targetChat.id);
+        comparisonModal.style.display = 'none';
+    });
+}
 
 document.getElementById('save-proxy-btn').addEventListener('click', async () => {
     const input = document.getElementById('proxy-base-url');
@@ -2162,4 +2878,32 @@ function showError(message) {
     setTimeout(() => {
         toast.classList.remove('show');
     }, 4000);
+}
+
+function showSuccess(message) {
+    let toast = document.querySelector('.success-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.className = 'success-toast';
+        toast.innerHTML = `
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            <span id="success-msg"></span>
+        `;
+        document.body.appendChild(toast);
+    }
+
+    toast.querySelector('#success-msg').textContent = message;
+
+    // Force reflow
+    void toast.offsetWidth;
+
+    toast.classList.add('show');
+
+    // Auto hide
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 3000);
 }
