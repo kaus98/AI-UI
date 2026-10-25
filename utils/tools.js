@@ -1,7 +1,5 @@
 const { searchWeb } = require('./search');
 const { createDriver, waitForResults } = require('./search/selenium');
-const { getRandomUserAgent, stripHtmlTags } = require('./search/helpers');
-const { By } = require('selenium-webdriver');
 
 let currentSearchEngine = 'auto';
 

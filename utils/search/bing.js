@@ -1,4 +1,4 @@
-const { fetchWithTimeout, stripHtmlTags, getRandomUserAgent, sleepWithJitter } = require('./helpers');
+const { fetchWithTimeout, stripHtmlTags, getRandomUserAgent } = require('./helpers');
 const { logSearch } = require('./logger');
 
 async function searchBing(query, limit = 10) {

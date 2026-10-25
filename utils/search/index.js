@@ -38,7 +38,7 @@ function getEngineScore(engine) {
 
 function selectBestEngine() {
     // Sort engines by performance score
-    const sorted = SEARCH_ENGINES.sort((a, b) => getEngineScore(b) - getEngineScore(a));
+    const sorted = [...SEARCH_ENGINES].sort((a, b) => getEngineScore(b) - getEngineScore(a));
     return sorted[0];
 }
 
@@ -55,9 +55,7 @@ async function searchWeb(query, limit = 10, engine = 'auto') {
         engines = [engine];
     }
     
-    const shuffled = engines.sort(() => Math.random() - 0.5);
-    
-    for (const eng of shuffled) {
+    for (const eng of engines) {
         const startTime = Date.now();
         try {
             let results;

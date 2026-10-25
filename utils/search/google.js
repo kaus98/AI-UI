@@ -23,7 +23,7 @@ async function searchGoogleSelenium(query, limit = 10) {
         console.log('Waiting for results to load (15 seconds)...');
         await driver.sleep(15000);
         
-        await savePageAnalysis(driver, 'google', query);
+        await savePageAnalysis(driver, 'google');
         
         const selectors = [
             'a[href*="http"]',

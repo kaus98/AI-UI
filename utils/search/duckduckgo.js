@@ -1,56 +1,13 @@
- const { fetchWithTimeout, stripHtmlTags, sleep, getRandomUserAgent, sleepWithJitter } = require('./helpers');
+ const { fetchWithTimeout, stripHtmlTags, sleep, sleepWithJitter } = require('./helpers');
 const { createDriver, savePageAnalysis, analyzeSelectors, extractResultsFromLinks, waitForResults } = require('./selenium');
-const { By, until } = require('selenium-webdriver');
+const { By } = require('selenium-webdriver');
 const { logSearch } = require('./logger');
 const fs = require('fs');
 const path = require('path');
 
-const MAX_VQD_CACHE = 100;
-const vqdCache = new Map();
 const SEARCH_DELAY_MS = 2000;
 let lastSearchTime = 0;
 const USE_SELENIUM = true;
-
-async function getDdgVqd(query, force = false) {
-    const key = query.toLowerCase().trim();
-    if (!force && vqdCache.has(key)) return vqdCache.get(key);
-
-    const ua = getRandomUserAgent();
-    const res = await fetchWithTimeout('https://duckduckgo.com', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': ua,
-            'Accept': 'text/html',
-            'Referer': 'https://duckduckgo.com/',
-            'DNT': '1',
-            'Connection': 'keep-alive'
-        },
-        body: new URLSearchParams({ q: query }).toString()
-    }, 8000);
-
-    if (!res.ok) throw new Error(`DuckDuckGo VQD request failed: ${res.status}`);
-    const html = await res.text();
-    const match = html.match(/vqd=\\?['"]([A-Za-z0-9_-]+)\\?['"]/);
-    if (!match) {
-        const altMatch = html.match(/vqd['"]\s*:\s*['"]([A-Za-z0-9_-]+)['"]/);
-        if (!altMatch) throw new Error('VQD token not found in DuckDuckGo response');
-        const token = altMatch[1];
-        if (vqdCache.size >= MAX_VQD_CACHE) {
-            const oldest = vqdCache.keys().next().value;
-            vqdCache.delete(oldest);
-        }
-        vqdCache.set(key, token);
-        return token;
-    }
-
-    if (vqdCache.size >= MAX_VQD_CACHE) {
-        const oldest = vqdCache.keys().next().value;
-        vqdCache.delete(oldest);
-    }
-    vqdCache.set(key, match[1]);
-    return match[1];
-}
 
 async function searchDuckDuckGoSelenium(query, limit = 10) {
     const maxLimit = Math.min(Number(limit) || 10, 30);
@@ -76,7 +33,7 @@ async function searchDuckDuckGoSelenium(query, limit = 10) {
         // Small stability wait with jitter
         await sleepWithJitter(1000, 2000);
         
-        await savePageAnalysis(driver, 'ddg', query);
+        await savePageAnalysis(driver, 'ddg');
         
         const selectors = [
             'a[href*="http"]',
@@ -233,6 +190,7 @@ async function searchDuckDuckGoSelenium(query, limit = 10) {
 }
 
 async function searchDuckDuckGo(query, limit = 10) {
+    const startTime = Date.now();
     const maxLimit = Math.min(Number(limit) || 10, 30);
     if (!query || typeof query !== 'string') throw new Error('Query is required');
 

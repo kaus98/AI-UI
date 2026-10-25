@@ -1,14 +1,146 @@
+// --- Default system prompts ---
+const DEFAULT_SYSTEM_PROMPTS = [
+    { id: 'none', label: 'None (no system prompt)', text: '' },
+    { id: 'general', label: 'General assistant', text: 'You are a helpful, accurate assistant. Answer clearly and directly, and say so when you are unsure.' },
+    { id: 'concise', label: 'Concise answers', text: 'Answer in as few words as possible while staying accurate. Use short sentences and bullet points only when they help.' },
+    { id: 'engineer', label: 'Senior software engineer', text: 'You are a senior software engineer. Give correct, idiomatic, production-quality code with brief explanations. Point out edge cases, security issues, and performance concerns. Ask for missing context instead of guessing.' },
+    { id: 'reviewer', label: 'Code reviewer', text: 'You are a meticulous code reviewer. Identify bugs, security risks, unclear naming, and missing tests. For each issue, state the problem, why it matters, and a concrete fix.' },
+    { id: 'teacher', label: 'Patient teacher', text: 'You are a patient teacher. Explain concepts step by step, start from what the learner likely knows, and check understanding with a short example or question at the end.' },
+    { id: 'writer', label: 'Writing editor', text: 'You are a professional editor. Improve clarity, grammar, and flow while keeping the author\'s voice. Explain significant changes briefly.' },
+    { id: 'translator', label: 'Translator', text: 'You are a professional translator. Translate the user\'s text faithfully and naturally into the requested language. Preserve formatting, names, and technical terms, and output only the translation unless asked for notes.' },
+    { id: 'summarizer', label: 'Summarizer', text: 'You summarize text accurately. Give a short summary first, then the key points as a bulleted list. Do not add information that is not in the source.' },
+    { id: 'analyst', label: 'Data analyst', text: 'You are a careful data analyst. State your assumptions, show the reasoning behind each conclusion, and flag when the data is insufficient to answer.' },
+    { id: 'brainstorm', label: 'Brainstorm partner', text: 'You are a creative brainstorming partner. Offer varied, specific ideas, build on the user\'s suggestions, and avoid judging them too early.' }
+];
+
+// --- Notifications ---
+const NOTIFICATIONS_SEEN_KEY = 'notificationsLastSeen';
+const notificationsBtn = document.getElementById('notifications-btn');
+const notificationsPanel = document.getElementById('notifications-panel');
+const notificationsWrapper = document.getElementById('notifications-wrapper');
+const notificationsBadge = document.getElementById('notifications-badge');
+const notificationsList = document.getElementById('notifications-list');
+const clearNotificationsBtn = document.getElementById('clear-notifications-btn');
+let notifications = [];
+const liveGenerations = new Map(); // chatId -> { jobId, controller, stopped } for generations streaming now
+
+function recordNotification(level, message, details = null) {
+    notifications.push({ timestamp: new Date().toISOString(), level, source: 'client', message, details });
+    updateNotificationBadge();
+    if (!notificationsPanel.classList.contains('hidden')) renderNotifications();
+    apiFetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level, message, details })
+    }).catch(() => {});
+}
+
+function updateNotificationBadge() {
+    const seen = localStorage.getItem(NOTIFICATIONS_SEEN_KEY) || '';
+    const unread = notifications.filter(n => n.timestamp > seen).length;
+    notificationsBadge.textContent = unread > 99 ? '99+' : String(unread);
+    notificationsBadge.classList.toggle('hidden', unread === 0);
+}
+
+function renderNotifications() {
+    notificationsList.innerHTML = '';
+    if (!notifications.length) {
+        const empty = document.createElement('div');
+        empty.className = 'notif-empty';
+        empty.textContent = 'No notifications yet';
+        notificationsList.appendChild(empty);
+        return;
+    }
+    [...notifications].reverse().forEach(n => {
+        const item = document.createElement('div');
+        item.className = `notif-item notif-${n.level}`;
+
+        const head = document.createElement('div');
+        head.className = 'notif-head';
+        const msg = document.createElement('span');
+        msg.className = 'notif-msg';
+        msg.textContent = n.message;
+        const time = document.createElement('time');
+        time.className = 'notif-time';
+        time.dateTime = n.timestamp;
+        time.textContent = new Date(n.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        head.append(msg, time);
+
+        const meta = document.createElement('div');
+        meta.className = 'notif-meta';
+        meta.textContent = `${n.level} · ${n.source}`;
+
+        item.append(head, meta);
+        if (n.details) {
+            const details = document.createElement('pre');
+            details.className = 'notif-details';
+            details.textContent = JSON.stringify(n.details, null, 2);
+            item.appendChild(details);
+        }
+        notificationsList.appendChild(item);
+    });
+}
+
+async function loadNotifications() {
+    try {
+        const res = await apiFetch('/api/notifications');
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+        notifications = await res.json();
+    } catch (e) {
+        console.error('Failed to load notifications', e);
+    }
+    updateNotificationBadge();
+}
+
+notificationsBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const opening = notificationsPanel.classList.contains('hidden');
+    notificationsPanel.classList.toggle('hidden', !opening);
+    notificationsBtn.setAttribute('aria-expanded', String(opening));
+    if (!opening) return;
+    await loadNotifications();
+    renderNotifications();
+    localStorage.setItem(NOTIFICATIONS_SEEN_KEY, new Date().toISOString());
+    updateNotificationBadge();
+});
+
+document.addEventListener('click', (e) => {
+    if (!notificationsWrapper.contains(e.target) && !notificationsPanel.classList.contains('hidden')) {
+        notificationsPanel.classList.add('hidden');
+        notificationsBtn.setAttribute('aria-expanded', 'false');
+    }
+});
+
+clearNotificationsBtn.addEventListener('click', async () => {
+    try {
+        const res = await apiFetch('/api/notifications', { method: 'DELETE' });
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+        notifications = [];
+        renderNotifications();
+        updateNotificationBadge();
+    } catch (err) {
+        showError('Failed to clear notifications: ' + err.message);
+    }
+});
+
+window.addEventListener('error', (e) => {
+    recordNotification('error', e.message || 'Unexpected error', { file: e.filename, line: e.lineno });
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+    recordNotification('error', `Unhandled promise rejection: ${e.reason?.message || e.reason}`);
+});
+
 const modelSelect = document.getElementById('model-select');
 const refreshModelsBtn = document.getElementById('refresh-models-btn');
 const chatContainer = document.getElementById('chat-container');
-const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
 const themeToggleBtn = document.getElementById('theme-toggle-btn');
 const statusIndicator = document.getElementById('status-indicator');
-const chatListDiv = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
 const incognitoChatBtn = document.getElementById('incognito-chat-btn');
+const regenerateTitlesBtn = document.getElementById('regenerate-titles-btn');
 const menuBtn = document.getElementById('menu-btn');
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
@@ -143,48 +275,132 @@ function renderChatList() {
         const titleDiv = document.createElement('div');
         titleDiv.className = 'chat-title';
         titleDiv.innerHTML = `${timelineIndicator}${branchIndicator}${chat.title || 'New Chat'}${incognitoIndicator}`;
+        titleDiv.title = 'Double-click to rename';
+        titleDiv.ondblclick = (e) => {
+            e.stopPropagation();
+            const newTitle = prompt('Enter a new name for this chat:', chat.title || 'New Chat');
+            if (newTitle && newTitle.trim()) {
+                chat.title = newTitle.trim();
+                saveChatState();
+                renderChatList();
+            }
+        };
 
-        const tagsDiv = document.createElement('div');
-        tagsDiv.className = 'chat-item-tags';
+        contentDiv.appendChild(titleDiv);
+
+        // Create menu button
+        const menuBtn = document.createElement('button');
+        menuBtn.className = 'chat-menu-btn';
+        menuBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>`;
+        menuBtn.title = 'Chat options';
+        menuBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleChatMenu(chat.id, menuBtn);
+        };
+
+        // Create menu dropdown
+        const menuDropdown = document.createElement('div');
+        menuDropdown.className = 'chat-menu-dropdown';
+        menuDropdown.id = `chat-menu-${chat.id}`;
+
+        // Add meta info to dropdown
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'chat-menu-meta';
+        metaDiv.innerHTML = `
+            <div class="chat-menu-meta-item"><strong>Endpoint:</strong> ${endpointName}</div>
+            <div class="chat-menu-meta-item"><strong>Model:</strong> ${modelName}</div>
+            <div class="chat-menu-meta-item"><strong>Folder:</strong> ${chat.folder || DEFAULT_FOLDER}</div>
+            <div class="chat-menu-meta-item"><strong>Date:</strong> ${dateStr}</div>
+        `;
+        menuDropdown.appendChild(metaDiv);
+
+        // Add tags to dropdown if present
         if (chat.tags && chat.tags.length) {
+            const tagsDiv = document.createElement('div');
+            tagsDiv.className = 'chat-menu-tags';
+            tagsDiv.innerHTML = '<strong>Tags:</strong>';
             chat.tags.slice(0, 4).forEach(tag => {
                 const span = document.createElement('span');
                 span.className = 'chat-tag';
                 span.textContent = tag;
                 tagsDiv.appendChild(span);
             });
+            menuDropdown.appendChild(tagsDiv);
         }
 
-        const metaDiv = document.createElement('div');
-        metaDiv.className = 'chat-meta';
-        metaDiv.textContent = `${endpointName} • ${modelName} • ${chat.folder || DEFAULT_FOLDER} • ${dateStr}`;
+        // Add action buttons to dropdown
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'chat-menu-actions';
 
-        contentDiv.appendChild(titleDiv);
-        if (chat.tags && chat.tags.length) contentDiv.appendChild(tagsDiv);
-        contentDiv.appendChild(metaDiv);
+        const pinAction = document.createElement('button');
+        pinAction.className = 'chat-menu-action';
+        pinAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${chat.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2 4h4l-2 2 1 6-5 5-5-5 1-6-2-2h4z"></path></svg> ${chat.pinned ? 'Unpin' : 'Pin'}`;
+        pinAction.onclick = (e) => {
+            e.stopPropagation();
+            window.togglePinChat(chat.id);
+            toggleChatMenu(chat.id, menuBtn);
+        };
 
-        const pinBtn = document.createElement('button');
-        pinBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${chat.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2 4h4l-2 2 1 6-5 5-5-5 1-6-2-2h4z"></path></svg>`;
-        pinBtn.className = 'pin-chat-btn';
-        pinBtn.title = chat.pinned ? 'Unpin' : 'Pin';
-        pinBtn.onclick = (e) => { e.stopPropagation(); togglePinChat(chat.id); };
+        const renameAction = document.createElement('button');
+        renameAction.className = 'chat-menu-action';
+        renameAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Rename`;
+        renameAction.onclick = (e) => {
+            e.stopPropagation();
+            const newTitle = prompt('Enter a new name for this chat:', chat.title || 'New Chat');
+            if (newTitle && newTitle.trim()) {
+                chat.title = newTitle.trim();
+                saveChatState();
+                renderChatList();
+            }
+            toggleChatMenu(chat.id, menuBtn);
+        };
 
-        const delBtn = document.createElement('button');
-        delBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
-        delBtn.className = 'delete-chat-btn';
-        delBtn.onclick = (e) => { e.stopPropagation(); deleteChat(chat.id); };
+        const regenerateTitleAction = document.createElement('button');
+        regenerateTitleAction.className = 'chat-menu-action';
+        regenerateTitleAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path><path d="M16 21h5v-5"></path></svg> Regenerate title`;
+        regenerateTitleAction.onclick = (e) => {
+            e.stopPropagation();
+            toggleChatMenu(chat.id, menuBtn);
+            generateChatTitle(chat);
+        };
 
-        const folderBtn = document.createElement('button');
-        folderBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
-        folderBtn.className = 'folder-chat-btn';
-        folderBtn.title = 'Change folder';
-        folderBtn.onclick = (e) => { e.stopPropagation(); showFolderMenu(chat.id, folderBtn); };
+        const folderAction = document.createElement('button');
+        folderAction.className = 'chat-menu-action';
+        folderAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Change folder`;
+        folderAction.onclick = (e) => {
+            e.stopPropagation();
+            toggleChatMenu(chat.id, menuBtn);
+            // Use a timeout to let the menu close before opening folder menu
+            setTimeout(() => {
+                const rect = folderAction.getBoundingClientRect();
+                showFolderMenu(chat.id, { getBoundingClientRect: () => rect });
+            }, 50);
+        };
 
-        div.onclick = () => setCurrentChat(chat.id);
+        const deleteAction = document.createElement('button');
+        deleteAction.className = 'chat-menu-action chat-menu-action-danger';
+        deleteAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Delete`;
+        deleteAction.onclick = (e) => {
+            e.stopPropagation();
+            window.deleteChat(chat.id);
+        };
+
+        actionsDiv.appendChild(pinAction);
+        actionsDiv.appendChild(renameAction);
+        actionsDiv.appendChild(regenerateTitleAction);
+        actionsDiv.appendChild(folderAction);
+        actionsDiv.appendChild(deleteAction);
+        menuDropdown.appendChild(actionsDiv);
+
+        div.onclick = (e) => {
+            // Close menu if clicking on the chat item (not menu button or dropdown)
+            if (!e.target.closest('.chat-menu-btn') && !e.target.closest('.chat-menu-dropdown')) {
+                setCurrentChat(chat.id);
+            }
+        };
         div.appendChild(contentDiv);
-        div.appendChild(pinBtn);
-        div.appendChild(folderBtn);
-        div.appendChild(delBtn);
+        div.appendChild(menuBtn);
+        div.appendChild(menuDropdown);
         chatItems.appendChild(div);
     });
 
@@ -267,7 +483,6 @@ window.editEndpoint = (id) => {
 let state = {
     chats: [],
     currentChatId: null,
-    isGenerating: false,
     endpoints: [],
     currentEndpointId: null,
     presets: [],
@@ -309,7 +524,7 @@ async function logToServer(level, message, details = null) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ level, message, details })
-        }).catch(e => {
+        }).catch(() => {
             // Silently ignore logging errors - they're non-critical
         });
     } catch (e) {
@@ -710,79 +925,118 @@ async function mergeBranch(sourceChatId, targetChatId) {
     }
 }
 
+function chatModelLabel(chat) {
+    const ep = state.endpoints.find(e => e.id === chat.endpointId);
+    return `${chat.modelId || 'No model'}${ep ? ` · ${ep.name}` : ''}`;
+}
+
 function populateComparisonSelects() {
     compareChat1.innerHTML = '<option value="">Select conversation</option>';
     compareChat2.innerHTML = '<option value="">Select conversation</option>';
-    
+
     state.chats.forEach(chat => {
         const option = document.createElement('option');
         option.value = chat.id;
-        option.textContent = chat.title || 'New Chat';
-        
-        const option1 = option.cloneNode(true);
-        const option2 = option.cloneNode(true);
-        
-        compareChat1.appendChild(option1);
-        compareChat2.appendChild(option2);
+        option.textContent = `${chat.title || 'New Chat'} (${chatModelLabel(chat)})`;
+        compareChat1.appendChild(option.cloneNode(true));
+        compareChat2.appendChild(option);
     });
+}
+
+// Pair each user question with the answer that follows it
+function buildTurns(chat) {
+    const turns = [];
+    chat.messages.forEach(msg => {
+        if (msg.role === 'user') turns.push({ prompt: msg, answer: null });
+        else if (msg.role === 'assistant' && turns.length) turns[turns.length - 1].answer = msg;
+    });
+    return turns;
+}
+
+function renderAnswerCell(chat, msg) {
+    const cell = document.createElement('div');
+    cell.className = 'compare-cell';
+
+    const meta = document.createElement('div');
+    meta.className = 'compare-meta';
+    const usageText = msg?.usage ? ` · ${msg.usage.totalTokens.toLocaleString()} tokens · $${msg.usage.totalCost.toFixed(4)}` : '';
+    meta.textContent = `${chatModelLabel(chat)}${usageText}`;
+
+    const body = document.createElement('div');
+    body.className = 'compare-body markdown-body';
+    if (msg) {
+        body.innerHTML = parseMarkdownWithMath(getMessageText(msg.content));
+    } else {
+        body.textContent = 'No answer in this conversation for this question.';
+        body.classList.add('compare-empty');
+    }
+
+    cell.append(meta, body);
+    return cell;
 }
 
 function startComparison() {
     const chat1Id = compareChat1.value;
     const chat2Id = compareChat2.value;
-    
+
     if (!chat1Id || !chat2Id || chat1Id === chat2Id) {
         showError('Please select two different conversations to compare');
         return;
     }
-    
+
     const chat1 = state.chats.find(c => c.id === chat1Id);
     const chat2 = state.chats.find(c => c.id === chat2Id);
-    
+
     if (!chat1 || !chat2) {
         showError('One or more conversations not found');
         return;
     }
-    
+
     // Show merge button if one is a branch
     const isBranchRelationship = (chat1.isBranch || chat1.parentBranchId) || (chat2.isBranch || chat2.parentBranchId);
     mergeBranchBtn.style.display = isBranchRelationship ? 'inline-block' : 'none';
-    
-    // Display comparison
-    document.getElementById('comparison-title-1').textContent = chat1.title || 'Conversation 1';
-    document.getElementById('comparison-title-2').textContent = chat2.title || 'Conversation 2';
-    
-    const content1 = document.getElementById('comparison-content-1');
-    const content2 = document.getElementById('comparison-content-2');
-    
-    content1.innerHTML = '';
-    content2.innerHTML = '';
-    
-    // Render messages for each conversation (simplified version)
-    chat1.messages.forEach((msg) => {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `message ${msg.role === 'user' ? 'user' : 'ai'}`;
-        const role = msg.role === 'user' ? 'User' : 'AI';
-        const htmlContent = Array.isArray(msg.content) 
-            ? msg.content.map(part => part.type === 'text' ? parseMarkdownWithMath(part.text) : `<img src="${part.image_url.url}" style="max-width: 100%; border-radius: 8px;">`).join('')
-            : parseMarkdownWithMath(msg.content || '');
-        
-        msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-body">${htmlContent}</div></div>`;
-        content1.appendChild(msgDiv);
+
+    const turns1 = buildTurns(chat1);
+    const turns2 = buildTurns(chat2);
+    const rowCount = Math.max(turns1.length, turns2.length);
+
+    comparisonResults.innerHTML = '';
+    if (!rowCount) {
+        const empty = document.createElement('div');
+        empty.className = 'compare-empty';
+        empty.textContent = 'Neither conversation has any messages yet.';
+        comparisonResults.appendChild(empty);
+        comparisonResults.classList.remove('hidden');
+        return;
+    }
+
+    const head = document.createElement('div');
+    head.className = 'compare-head';
+    [chat1, chat2].forEach(chat => {
+        const title = document.createElement('div');
+        title.className = 'compare-head-title';
+        title.textContent = chat.title || 'New Chat';
+        head.appendChild(title);
     });
-    
-    chat2.messages.forEach((msg) => {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `message ${msg.role === 'user' ? 'user' : 'ai'}`;
-        const role = msg.role === 'user' ? 'User' : 'AI';
-        const htmlContent = Array.isArray(msg.content) 
-            ? msg.content.map(part => part.type === 'text' ? parseMarkdownWithMath(part.text) : `<img src="${part.image_url.url}" style="max-width: 100%; border-radius: 8px;">`).join('')
-            : parseMarkdownWithMath(msg.content || '');
-        
-        msgDiv.innerHTML = `<div class="message-content markdown-body"><div class="msg-body">${htmlContent}</div></div>`;
-        content2.appendChild(msgDiv);
-    });
-    
+    comparisonResults.appendChild(head);
+
+    for (let i = 0; i < rowCount; i++) {
+        const row = document.createElement('div');
+        row.className = 'compare-row';
+
+        const prompt = document.createElement('div');
+        prompt.className = 'compare-prompt';
+        const promptSource = (turns1[i] || turns2[i]).prompt;
+        prompt.textContent = `Q${i + 1}: ${getMessageText(promptSource.content)}`;
+
+        const grid = document.createElement('div');
+        grid.className = 'compare-grid';
+        grid.append(renderAnswerCell(chat1, turns1[i]?.answer), renderAnswerCell(chat2, turns2[i]?.answer));
+
+        row.append(prompt, grid);
+        comparisonResults.appendChild(row);
+    }
+
     comparisonResults.classList.remove('hidden');
 }
 
@@ -834,6 +1088,8 @@ async function setCurrentChat(id) {
     }
     activateComposer({ focus: true });
     if (window.innerWidth <= 768) sidebar.classList.remove('open');
+    reattachPendingMessage(chat);
+    syncComposerState();
 }
 
 async function generateChatTitle(chat) {
@@ -848,12 +1104,22 @@ async function generateChatTitle(chat) {
         const endpointId = chat.endpointId || state.currentEndpointId;
         const ep = state.endpoints.find(e => e.id === endpointId);
         const model = chat.modelId || ep?.defaultModel || modelSelect.value;
-        if (!endpointId || !model) return;
+        if (!endpointId || !model) {
+            console.warn('Cannot generate title: missing endpoint or model');
+            // Fallback: use first few words of message
+            const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+            chat.title = fallbackTitle.substring(0, 50);
+            await saveChatState();
+            renderChatList();
+            return;
+        }
 
         chat.titleGenerating = true;
         const titlePrompt = `Generate a short, concise title of no more than 5 words for this conversation. Return only the title, with no quotes, explanation, or punctuation.
 
 First message: "${messageText.substring(0, 500)}"`;
+        
+        // Use streaming to match server behavior for localhost endpoints
         const response = await apiFetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -862,33 +1128,110 @@ First message: "${messageText.substring(0, 500)}"`;
                 model,
                 messages: [{ role: 'user', content: titlePrompt }],
                 temperature: 0.3,
-                stream: false,
+                stream: true,
                 activeTools: []
             })
         });
 
-        if (!response.ok) return;
-        const data = await response.json();
-        const rawTitle = data.choices?.[0]?.message?.content;
-        const generatedTitle = typeof rawTitle === 'string'
-            ? rawTitle.trim().replace(/^["']|["']$/g, '').replace(/[.!?]+$/, '').substring(0, 50)
-            : '';
+        if (!response.ok) {
+            console.warn('Failed to generate title: API response not OK', response.status);
+            const errorText = await response.text();
+            console.warn('Error response:', errorText);
+            // Fallback: use first few words of message
+            const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+            chat.title = fallbackTitle.substring(0, 50);
+            await saveChatState();
+            renderChatList();
+            return;
+        }
+
+        // Handle streaming response
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6);
+                    if (data === '[DONE]') continue;
+                    
+                    try {
+                        const parsed = JSON.parse(data);
+                        if (parsed.choices?.[0]?.delta?.content) {
+                            fullContent += parsed.choices[0].delta.content;
+                        }
+                    } catch (e) {
+                        // Ignore parse errors for SSE chunks
+                    }
+                }
+            }
+        }
+
+        const generatedTitle = fullContent.trim().replace(/^["']|["']$/g, '').replace(/[.!?]+$/, '').substring(0, 50);
 
         if (generatedTitle.length > 2) {
             chat.title = generatedTitle;
             await saveChatState();
             renderChatList();
+            console.log('Generated chat title:', generatedTitle);
+        } else {
+            console.warn('Generated title too short or invalid:', fullContent);
+            // Fallback: use first few words of message
+            const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+            chat.title = fallbackTitle.substring(0, 50);
+            await saveChatState();
+            renderChatList();
         }
     } catch (e) {
         console.warn('Failed to generate chat title:', e);
+        // Fallback: use first few words of message
+        const firstUserMessage = chat.messages.find(m => m.role === 'user');
+        if (firstUserMessage) {
+            const messageText = getMessageText(firstUserMessage.content);
+            if (messageText) {
+                const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+                chat.title = fallbackTitle.substring(0, 50);
+                await saveChatState();
+                renderChatList();
+            }
+        }
     } finally {
         delete chat.titleGenerating;
     }
 }
 
-function updateChatTitle(chat, firstMessage) {
+// Function to regenerate titles for all chats with "New Chat"
+async function regenerateAllUntitledChats() {
+    const untitledChats = state.chats.filter(c => !c.title || c.title === 'New Chat');
+    if (untitledChats.length === 0) {
+        alert('No chats need title regeneration.');
+        return;
+    }
+    
+    if (!confirm(`Regenerate titles for ${untitledChats.length} chat(s)? This will use your API quota.`)) {
+        return;
+    }
+    
+    for (const chat of untitledChats) {
+        await generateChatTitle(chat);
+        // Small delay between requests to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    alert(`Regenerated titles for ${untitledChats.length} chat(s).`);
+}
+
+function updateChatTitle(chat) {
     // Use AI to generate a meaningful title
     if (!chat.title || chat.title === 'New Chat') {
+        console.log('Triggering title generation for chat:', chat.id);
         generateChatTitle(chat);
     }
 }
@@ -936,6 +1279,31 @@ async function changeChatFolder(chatId, newFolder) {
     showSuccess(`Chat moved to ${newFolder}`);
 }
 
+function toggleChatMenu(chatId, triggerBtn) {
+    // Close all other open menus first
+    document.querySelectorAll('.chat-menu-dropdown.open').forEach(menu => {
+        if (menu.id !== `chat-menu-${chatId}`) {
+            menu.classList.remove('open');
+        }
+    });
+
+    const menu = document.getElementById(`chat-menu-${chatId}`);
+    if (!menu) return;
+
+    const isOpen = menu.classList.contains('open');
+    menu.classList.toggle('open');
+
+    if (!isOpen) {
+        // Move menu to body for proper positioning
+        document.body.appendChild(menu);
+        const rect = triggerBtn.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.top = `${rect.bottom + 4}px`;
+        menu.style.right = `${window.innerWidth - rect.right}px`;
+        menu.style.zIndex = '1001';
+    }
+}
+
 function showFolderMenu(chatId, triggerBtn) {
     const chat = state.chats.find(c => c.id === chatId);
     if (!chat) return;
@@ -956,7 +1324,7 @@ function showFolderMenu(chatId, triggerBtn) {
     menu.style.position = 'absolute';
     menu.style.top = `${rect.bottom + 4}px`;
     menu.style.right = `${window.innerWidth - rect.right}px`;
-    menu.style.zIndex = '1000';
+    menu.style.zIndex = '1002';
 
     document.body.appendChild(menu);
 
@@ -995,61 +1363,119 @@ function renderMessages() {
                 <h2>Welcome</h2>
                 <p>Select a model and start chatting.</p>
 
-                <!-- System Prompt -->
-                <div class="config-section" style="margin-top: 20px; max-width: 600px; margin-left: auto; margin-right: auto; text-align: left;">
-                    <label style="display:block; margin-bottom: 8px; font-weight: 500;">System Prompt</label>
-                    <textarea
-                        id="system-prompt-input"
-                        class="system-prompt-input"
-                        placeholder="Enter the system prompt text..."
-                        style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-primary); min-height: 80px; resize: vertical;"
-                    >${escapeHtml(String(sysPrompt))}</textarea>
+                <div class="chat-settings">
+                    <section class="settings-card" aria-labelledby="system-prompt-title">
+                        <div class="settings-card-header">
+                            <span id="system-prompt-title" class="settings-card-title">System prompt</span>
+                            <span id="system-prompt-preview" class="settings-card-preview"></span>
+                            <button type="button" id="system-prompt-toggle" class="settings-toggle" aria-expanded="false" aria-controls="system-prompt-body">Edit</button>
+                        </div>
+                        <div class="preset-chips" role="group" aria-label="Default system prompts">
+                            ${DEFAULT_SYSTEM_PROMPTS.map(p => `<button type="button" class="preset-chip" data-preset-id="${p.id}">${escapeHtml(p.label)}</button>`).join('')}
+                        </div>
+                        <div id="system-prompt-body" class="settings-card-body hidden">
+                            <textarea id="system-prompt-input" class="system-prompt-input" placeholder="Enter the system prompt text...">${escapeHtml(String(sysPrompt))}</textarea>
+                            <div class="settings-card-footer">
+                                <span id="system-prompt-count"></span>
+                                <button type="button" id="system-prompt-reset" class="ghost-btn">Reset</button>
+                            </div>
+                        </div>
+                    </section>
 
-                    <!-- Temperature -->
-                    <div style="margin-top: 20px;">
-                        <label style="display:flex; justify-content:space-between; margin-bottom: 8px; font-weight: 500;">
-                            <span>Temperature</span>
-                            <span id="temp-display">${escapeHtml(String(temperature))}</span>
-                        </label>
-                        <input
-                            type="range"
-                            id="temperature-input"
-                            min="0" max="2" step="0.1"
-                            value="${escapeHtml(String(temperature))}"
-                            style="width: 100%; cursor: pointer;"
-                        >
-                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 5px;">
-                            Lower values (0.2) for precise answers, higher values (1.0+) for creativity.
-                        </p>
-                    </div>
+                    <section class="settings-card" aria-labelledby="temperature-title">
+                        <div class="settings-card-header">
+                            <span id="temperature-title" class="settings-card-title">Temperature</span>
+                            <span id="temp-display" class="temp-badge">${escapeHtml(String(temperature))}</span>
+                        </div>
+                        <div class="preset-chips" role="group" aria-label="Temperature presets">
+                            <button type="button" class="preset-chip" data-temp="0.2">Precise</button>
+                            <button type="button" class="preset-chip" data-temp="0.7">Balanced</button>
+                            <button type="button" class="preset-chip" data-temp="1">Creative</button>
+                        </div>
+                        <input type="range" id="temperature-input" min="0" max="2" step="0.1" value="${escapeHtml(String(temperature))}" aria-label="Temperature">
+                        <p id="temp-hint" class="settings-card-hint"></p>
+                    </section>
                 </div>
             </div>`;
 
         if (chat) {
-            // System Prompt Listener
             const spInput = document.getElementById('system-prompt-input');
-            spInput.addEventListener('input', (e) => {
-                chat.systemPromptDraft = e.target.value;
-                saveChatState();
-            });
-
-            // Temperature Listener
+            const spBody = document.getElementById('system-prompt-body');
+            const spToggle = document.getElementById('system-prompt-toggle');
+            const spPreview = document.getElementById('system-prompt-preview');
+            const spCount = document.getElementById('system-prompt-count');
+            const spReset = document.getElementById('system-prompt-reset');
+            const chipButtons = [...document.querySelectorAll('.preset-chip[data-preset-id]')];
             const tempInput = document.getElementById('temperature-input');
             const tempDisplay = document.getElementById('temp-display');
+            const tempHint = document.getElementById('temp-hint');
+            const tempChips = [...document.querySelectorAll('.preset-chip[data-temp]')];
 
-            tempInput.addEventListener('input', (e) => {
-                const val = parseFloat(e.target.value);
-                tempDisplay.textContent = val;
-                chat.temperatureDraft = val;
+            const presetFor = (text) => (DEFAULT_SYSTEM_PROMPTS.find(p => p.text === text.trim()) || { id: 'custom' }).id;
+            let chosenPresetId = presetFor(spInput.value) === 'custom' ? 'none' : presetFor(spInput.value);
+
+            const refreshSystemPrompt = () => {
+                const text = spInput.value;
+                const trimmed = text.trim();
+                const activeId = presetFor(text);
+                chipButtons.forEach(b => b.classList.toggle('active', b.dataset.presetId === activeId));
+                spPreview.textContent = trimmed ? (trimmed.length > 70 ? `${trimmed.slice(0, 70)}…` : trimmed) : 'None';
+                spCount.textContent = `${text.length.toLocaleString()} characters`;
+            };
+
+            const setSystemPromptText = (text) => {
+                spInput.value = text;
+                chat.systemPromptDraft = text;
                 saveChatState();
+                refreshSystemPrompt();
+            };
+
+            chipButtons.forEach(btn => btn.addEventListener('click', () => {
+                const preset = DEFAULT_SYSTEM_PROMPTS.find(p => p.id === btn.dataset.presetId);
+                if (!preset) return;
+                chosenPresetId = preset.id;
+                setSystemPromptText(preset.text);
+            }));
+
+            spInput.addEventListener('input', () => setSystemPromptText(spInput.value));
+
+            spToggle.addEventListener('click', () => {
+                const open = spBody.classList.toggle('hidden') === false;
+                spToggle.textContent = open ? 'Collapse' : 'Edit';
+                spToggle.setAttribute('aria-expanded', String(open));
+                if (open) spInput.focus();
             });
+
+            spReset.addEventListener('click', () => {
+                const preset = DEFAULT_SYSTEM_PROMPTS.find(p => p.id === chosenPresetId) || DEFAULT_SYSTEM_PROMPTS[0];
+                setSystemPromptText(preset.text);
+            });
+
+            const temperatureHint = (t) => (t < 0.5 ? 'Focused and predictable' : t < 1.2 ? 'Balanced' : 'Creative and varied');
+            const setTemperature = (value, save = true) => {
+                const t = Math.round(Number(value) * 10) / 10;
+                tempInput.value = t;
+                tempDisplay.textContent = t.toFixed(1);
+                tempHint.textContent = temperatureHint(t);
+                tempChips.forEach(b => b.classList.toggle('active', Number(b.dataset.temp) === t));
+                if (save) {
+                    chat.temperatureDraft = t;
+                    saveChatState();
+                }
+            };
+            tempInput.addEventListener('input', () => setTemperature(tempInput.value));
+            tempChips.forEach(b => b.addEventListener('click', () => setTemperature(b.dataset.temp)));
+
+            refreshSystemPrompt();
+            setTemperature(tempInput.value, false);
         }
         return;
     }
     chat.messages.forEach((msg, idx) => {
         if (msg.role === 'system') return; // Don't render system prompts as bubbles
         // Always render from content; ignore any persisted html to avoid XSS from imported chats
-        appendMessageDiv(msg.role === 'user' ? 'User' : 'AI', msg.content, msg.role === 'user' ? 'user' : 'ai', null, chat, idx, msg.createdAt);
+        const div = appendMessageDiv(msg.role === 'user' ? 'User' : 'AI', msg.content, msg.role === 'user' ? 'user' : 'ai', null, chat, idx, msg.createdAt);
+        if (msg.jobId) div.dataset.jobId = msg.jobId;
     });
     scrollToBottom();
 }
@@ -1102,15 +1528,15 @@ const renderer = {
 const tokenizer = {
     // Disable indented code blocks (4 spaces). 
     // This forces users to use backticks for code blocks, preventing accidental splitting.
-    code(src) {
+    code() {
         return false;
     },
     // Also disable lists and blockquotes if we want strictly "text unless backticks"
     // This often causes code with dashes or > to be split into lists/quotes
-    list(src) { return false; },
-    blockquote(src) { return false; },
+    list() { return false; },
+    blockquote() { return false; },
     // Disable HTML parsing entirely. Treat <tags> as plain text.
-    html(src) { return false; }
+    html() { return false; }
 };
 
 try {
@@ -1249,7 +1675,7 @@ function appendMessageDiv(role, content, type, preRendered = null, chat = null, 
     const isUser = type === 'user';
     const extraActions = isUser
         ? `<button class="msg-action-btn msg-edit-btn" title="Edit"><i class="fa-solid fa-pen"></i></button>`
-        : `<button class="msg-action-btn msg-regenerate-btn" title="Regenerate"><i class="fa-solid fa-rotate-right"></i></button>`;
+        : `<button class="msg-action-btn msg-regenerate-btn" title="Regenerate"><i class="fa-solid fa-rotate-right"></i></button><button class="msg-action-btn msg-ask-models-btn" title="Ask other models"><i class="fa-solid fa-layer-group"></i></button>`;
     
     // Add branch button for all messages if chat exists
     const branchAction = chat && msgIndex >= 0 
@@ -1296,7 +1722,8 @@ function appendMessageDiv(role, content, type, preRendered = null, chat = null, 
 
     // Wire up regenerate assistant message
     if (!isUser && chat && msgIndex >= 0) {
-        msgDiv.querySelector('.msg-regenerate-btn').addEventListener('click', () => regenerateAssistantMessage(chat, msgIndex, msgDiv));
+        msgDiv.querySelector('.msg-regenerate-btn').addEventListener('click', () => regenerateAssistantMessage(chat, msgIndex));
+        msgDiv.querySelector('.msg-ask-models-btn').addEventListener('click', () => openModelBranchModal(chat, msgIndex));
     }
     
     // Wire up branch button
@@ -1480,6 +1907,7 @@ async function init() {
     } catch (e) {}
     await fetchEndpoints(); // Load endpoints first
     await fetchTools();     // Load tools
+    await loadNotifications();
     renderTools();
     await loadChatState();  // Load history
 
@@ -1575,12 +2003,6 @@ function getMessageText(content) {
     return String(content);
 }
 
-function estimateTokens(text) {
-    if (!text) return 0;
-    // Rough estimate: ~4 characters per token for English text
-    return Math.ceil(text.length / 4);
-}
-
 function editUserMessage(chat, msgIndex, msgDiv) {
     const body = msgDiv.querySelector('.msg-body');
     const original = getMessageText(chat.messages[msgIndex].content);
@@ -1614,7 +2036,7 @@ function editUserMessage(chat, msgIndex, msgDiv) {
         
         // Update title if this is the first message
         if (msgIndex === 0) {
-            updateChatTitle(chat, newText);
+            updateChatTitle(chat);
         }
         
         await saveChatState();
@@ -1629,8 +2051,8 @@ function editUserMessage(chat, msgIndex, msgDiv) {
     ta.focus();
 }
 
-async function regenerateAssistantMessage(chat, msgIndex, msgDiv) {
-    if (state.isGenerating) return;
+async function regenerateAssistantMessage(chat, msgIndex) {
+    if (isChatGenerating(getCurrentChat())) return;
     // Truncate messages at the user message preceding this assistant
     let cutIndex = msgIndex;
     for (let i = msgIndex - 1; i >= 0; i--) {
@@ -1645,27 +2067,161 @@ async function regenerateAssistantMessage(chat, msgIndex, msgDiv) {
     await generateAssistantResponse(chat);
 }
 
-async function generateAssistantResponse(chat) {
-    state.isGenerating = true;
-    sendBtn.disabled = true;
-    statusIndicator.style.backgroundColor = '#f7630c';
-    const assistantCreatedAt = new Date().toISOString();
+// Reads a generation job's SSE stream. If the connection drops, it reconnects and resumes
+// from the last received character offset, so no output is lost.
+async function consumeJobStream({ jobId, start, signal, onEvent }) {
+    let offset = 0;
+    let pending = '';
+    let attempt = 0;
+
+    const readStream = async (response) => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) return null;
+            const text = decoder.decode(value, { stream: true });
+            offset += text.length;
+            pending += text;
+            const lines = pending.split('\n');
+            pending = lines.pop();
+            for (const line of lines) {
+                if (line.trim() === 'event: end') return 'done';
+                const chunk = parseSseLine(line);
+                if (!chunk) continue;
+                if (chunk.error) {
+                    const err = new Error(chunk.error.message || 'Generation failed');
+                    err.fatal = true;
+                    throw err;
+                }
+                onEvent(chunk);
+            }
+        }
+    };
+
+    while (true) {
+        let result = null;
+        try {
+            const response = attempt === 0 && start
+                ? await start()
+                : await apiFetch(`/api/jobs/${encodeURIComponent(jobId)}/stream?offset=${offset}`, { signal });
+            if (response.status === 404) return 'interrupted';
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                const fatal = new Error(getApiError(err, response.status));
+                fatal.fatal = true;
+                throw fatal;
+            }
+            result = await readStream(response);
+        } catch (err) {
+            if (err.name === 'AbortError' || err.fatal) throw err;
+            console.warn('Stream connection lost, reconnecting:', err.message);
+        }
+        if (result === 'done') return 'done';
+        if (++attempt > 30) throw new Error('Connection lost and the response could not be resumed');
+        await new Promise(r => setTimeout(r, Math.min(500 * attempt, 3000)));
+    }
+}
+
+function stopGeneration() {
+    const gen = liveGenerations.get(getCurrentChat()?.id);
+    if (!gen) return;
+    gen.stopped = true;
+    gen.controller.abort();
+    apiFetch(`/api/jobs/${encodeURIComponent(gen.jobId)}/cancel`, { method: 'POST' }).catch(() => {});
+}
+
+function isChatGenerating(chat) {
+    return !!chat && liveGenerations.has(chat.id);
+}
+
+// Composer buttons reflect the chat that is on screen; other chats can keep generating in the background
+function syncComposerState() {
+    const busy = isChatGenerating(getCurrentChat());
+    sendBtn.disabled = busy || getInputText().trim() === '';
+    sendBtn.hidden = busy;
+    if (stopBtn) stopBtn.hidden = !busy;
+    statusIndicator.style.backgroundColor = liveGenerations.size ? '#f7630c' : '#0e7a0d';
+}
+
+// After a reload or chat switch, reattach to a response that was still streaming when the page was left.
+function reattachPendingMessage(chat) {
+    if (!chat) return;
+    const index = chat.messages.findIndex(m => m.pending);
+    if (index === -1) return;
+    const existing = liveGenerations.get(chat.id);
+    // Stop this tab's old stream for the chat; the server job keeps running and is replayed below
+    if (existing) existing.controller.abort();
+    generateAssistantResponse(chat, { resumeIndex: index });
+}
+
+async function generateAssistantResponse(chat, { resumeIndex = null } = {}) {
+    const controller = new AbortController();
+    const gen = { jobId: null, controller, stopped: false };
+    liveGenerations.set(chat.id, gen);
+    syncComposerState();
+
+    const ep = state.endpoints.find(e => e.id === (chat.endpointId || state.currentEndpointId));
+    let start = null;
+    let placeholder;
+    if (resumeIndex !== null) {
+        placeholder = chat.messages[resumeIndex];
+        document.querySelectorAll(`[data-job-id="${placeholder.jobId}"]`).forEach(el => el.remove());
+    } else {
+        const useStream = ep ? ep.stream !== false : true;
+        const payload = {
+            endpointId: chat.endpointId || state.currentEndpointId,
+            model: chat.modelId || modelSelect.value,
+            messages: chat.messages.slice(),
+            temperature: chat.temperature || 0.7,
+            stream: useStream,
+            activeTools: state.tools.filter(t => t.enabled).map(t => t.id)
+        };
+        const jobId = crypto.randomUUID();
+        placeholder = { role: 'assistant', content: '', reasoning_content: null, createdAt: new Date().toISOString(), pending: true, jobId };
+        chat.messages.push(placeholder);
+        await saveChatState();
+        logToServer('INFO', 'Sending Message', { model: payload.model, endpointId: payload.endpointId, stream: useStream });
+        start = () => apiFetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...payload, jobId }),
+            signal: controller.signal
+        });
+    }
+    gen.jobId = placeholder.jobId;
+    const assistantCreatedAt = placeholder.createdAt;
+
     const aiMsgDiv = appendMessageDiv('AI', '', 'ai', null, null, -1, assistantCreatedAt);
+    aiMsgDiv.dataset.jobId = gen.jobId;
+    // Only the chat on screen gets a visible bubble; background branches update their data only
+    if (getCurrentChat() !== chat) aiMsgDiv.remove();
     const aiBodyDiv = aiMsgDiv.querySelector('.msg-body');
     aiBodyDiv.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
     scrollToBottom();
 
     let answerBuffer = '';
     let reasoningBuffer = '';
-    let rawText = '';
     let hasReceivedData = false;
-    let ep = null;
     let usage = null;
     let reasoningEl = null;
     let answerEl = null;
-    let chunkCount = 0;
-    let deltaCount = 0;
-    let streamStart = performance.now();
+    let lastPersist = 0;
+
+    function removePlaceholder() {
+        const i = chat.messages.indexOf(placeholder);
+        if (i >= 0) chat.messages.splice(i, 1);
+    }
+
+    // Save partial text now and then, so a crash or restart loses at most a few seconds
+    function persistPartial() {
+        const now = Date.now();
+        if (now - lastPersist < 1500) return;
+        lastPersist = now;
+        placeholder.content = answerBuffer;
+        placeholder.reasoning_content = reasoningBuffer || null;
+        saveChatState();
+    }
 
     function ensureStreamingContainer() {
         if (hasReceivedData) return;
@@ -1707,10 +2263,6 @@ async function generateAssistantResponse(chat) {
         hasReceivedData = true;
     }
 
-    function estimateTokens(text) {
-        return Math.ceil(text.length / 4);
-    }
-
     function appendReasoning(text) {
         ensureStreamingContainer();
         reasoningBuffer += text;
@@ -1721,6 +2273,7 @@ async function generateAssistantResponse(chat) {
             if (summary) summary.textContent = `Thinking (${estimateTokens(reasoningBuffer)} tokens)`;
             scrollToBottom();
         }
+        persistPartial();
     }
 
     function appendAnswer(text) {
@@ -1728,24 +2281,26 @@ async function generateAssistantResponse(chat) {
         answerBuffer += text;
         if (answerEl) {
             answerEl.textContent = answerBuffer;
-            
+
             // Remove progress indicator once content starts appearing
             const progressIndicator = aiBodyDiv.querySelector('#streaming-progress');
             if (progressIndicator && answerBuffer.length > 0) {
                 progressIndicator.remove();
             }
-            
+
             scrollToBottom();
         }
+        persistPartial();
     }
 
-    function finalizeDisplay(formattingData = null) {
+    function finalizeDisplay(usageData = null) {
         const finalContent = answerBuffer || reasoningBuffer || '';
         if (!finalContent) {
             aiMsgDiv.remove();
+            removePlaceholder();
             return;
         }
-        
+
         // Preserve reasoning panel if it exists and has content
         if (reasoningEl && reasoningBuffer) {
             // Keep the reasoning panel visible and formatted
@@ -1760,7 +2315,7 @@ async function generateAssistantResponse(chat) {
                 reasoningEl.open = true;
             }
         }
-        
+
         // Apply markdown formatting to the main answer
         if (answerEl) {
             answerEl.innerHTML = parseMarkdownWithMath(answerBuffer);
@@ -1771,172 +2326,226 @@ async function generateAssistantResponse(chat) {
             addFadeInEffects(aiBodyDiv);
         }
 
-        const assistantIndex = chat.messages.length;
-        const usage = calculateUsageCost(formattingData, ep, chat.messages, finalContent);
-        
+        const priorMessages = chat.messages.slice(0, chat.messages.indexOf(placeholder));
+        const costed = calculateUsageCost(usageData, ep, priorMessages, finalContent);
+
         // Save both reasoning and answer content separately
-        const msg = { 
-            role: 'assistant', 
-            content: answerBuffer || finalContent, 
+        Object.assign(placeholder, {
+            content: answerBuffer || finalContent,
             reasoning_content: reasoningBuffer || null,
-            createdAt: assistantCreatedAt, 
-            usage 
-        };
-        chat.messages.push(msg);
+            usage: costed,
+            pending: false
+        });
+        delete placeholder.jobId;
 
         const usageFooter = document.createElement('div');
         usageFooter.className = 'msg-usage';
-        usageFooter.textContent = `${usage.totalTokens.toLocaleString()} tokens · $${usage.totalCost.toFixed(4)}`;
+        usageFooter.textContent = `${costed.totalTokens.toLocaleString()} tokens · $${costed.totalCost.toFixed(4)}`;
         const contentDiv = aiMsgDiv.querySelector('.message-content');
         if (contentDiv) contentDiv.appendChild(usageFooter);
 
-        if (chat) {
-            const regenerateBtn = aiMsgDiv.querySelector('.msg-regenerate-btn');
-            if (regenerateBtn) regenerateBtn.addEventListener('click', () => regenerateAssistantMessage(chat, assistantIndex, aiMsgDiv));
-        }
+        const regenerateBtn = aiMsgDiv.querySelector('.msg-regenerate-btn');
+        if (regenerateBtn) regenerateBtn.addEventListener('click', () => regenerateAssistantMessage(chat, chat.messages.indexOf(placeholder)));
+        const askBtn = aiMsgDiv.querySelector('.msg-ask-models-btn');
+        if (askBtn) askBtn.addEventListener('click', () => openModelBranchModal(chat, chat.messages.indexOf(placeholder)));
     }
 
+    const onEvent = (chunk) => {
+        if (chunk.usage) usage = chunk.usage;
+        const delta = chunk.choices?.[0]?.delta || {};
+        if (delta.reasoning_content) appendReasoning(delta.reasoning_content);
+        if (delta.content) appendAnswer(delta.content);
+    };
+
     try {
-        ep = state.endpoints.find(e => e.id === (chat.endpointId || state.currentEndpointId));
-        const useStream = ep ? ep.stream !== false : true;
-        const activeTools = state.tools.filter(t => t.enabled).map(t => t.id);
-        const payload = {
-            endpointId: chat.endpointId || state.currentEndpointId,
-            model: chat.modelId || modelSelect.value,
-            messages: chat.messages,
-            temperature: chat.temperature || 0.7,
-            stream: useStream,
-            activeTools
-        };
-        logToServer('INFO', 'Sending Message', { model: payload.model, endpointId: payload.endpointId, stream: useStream });
+        const outcome = await consumeJobStream({ jobId: gen.jobId, start, signal: controller.signal, onEvent });
+        if (liveGenerations.get(chat.id) !== gen) return;
 
-        const controller = new AbortController();
-        if (stopBtn) {
-            stopBtn.hidden = false;
-            sendBtn.hidden = true;
-            stopBtn.addEventListener('click', () => controller.abort(), { once: true });
-        }
-
-        const response = await apiFetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: controller.signal
-        });
-
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(getApiError(err, response.status));
-        }
-
-        if (!useStream) {
-            const data = await response.json();
-            const message = data.choices?.[0]?.message || {};
-            answerBuffer = message.content || '';
-            reasoningBuffer = message.reasoning_content || message.reasoning || '';
-            usage = data.usage || null;
-            
-            // For non-streaming, we need to create the reasoning panel first
-            if (reasoningBuffer) {
-                ensureStreamingContainer();
-                const reasoningBody = reasoningEl.querySelector('.reasoning-body');
-                if (reasoningBody) {
-                    reasoningBody.textContent = reasoningBuffer;
-                    const summary = reasoningEl.querySelector('summary');
-                    if (summary) {
-                        summary.textContent = `Thinking (${estimateTokens(reasoningBuffer)} tokens)`;
-                    }
-                    reasoningEl.open = true;
-                }
-            }
-            
-            finalizeDisplay(data);
-            await saveChatState();
-            statusIndicator.style.backgroundColor = '#0e7a0d';
-            statusIndicator.title = 'Connected';
-            return;
-        }
-
-        if (!response.body) {
-            throw new Error('Streaming not supported by this browser or endpoint');
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let pending = '';
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunkCount++;
-            const decoded = decoder.decode(value, { stream: true });
-            pending += decoded;
-            rawText += decoded;
-            const lines = pending.split('\n');
-            pending = lines.pop();
-
-            for (const line of lines) {
-                const chunk = parseSseLine(line);
-                if (chunk) {
-                    if (chunk.usage) usage = chunk.usage;
-                    const delta = chunk.choices?.[0]?.delta || {};
-                    const contentDelta = delta.content || '';
-                    const reasoningDelta = delta.reasoning_content || '';
-
-                    if (reasoningDelta) {
-                        appendReasoning(reasoningDelta);
-                        deltaCount++;
-                    }
-                    if (contentDelta) {
-                        appendAnswer(contentDelta);
-                        deltaCount++;
-                    }
-                }
-            }
-
-            // Yield to the browser's main thread so the UI can paint
-            if (chunkCount % 5 === 0) {
-                await new Promise(r => setTimeout(r, 0));
-            }
-        }
-
-        logToServer('DEBUG', 'Stream done', { chunkCount, deltaCount, elapsedMs: Math.round(performance.now() - streamStart), answerLen: answerBuffer.length, reasoningLen: reasoningBuffer.length });
-
-        // Apply markdown formatting and persist message
         finalizeDisplay(usage);
+        if (outcome === 'interrupted') {
+            appendMessageDiv('System', 'This response was interrupted (the server restarted or the response expired). Partial text was kept.', 'ai');
+        }
         await saveChatState();
         logToServer('INFO', 'Message Received', { len: answerBuffer.length || reasoningBuffer.length });
-        statusIndicator.style.backgroundColor = '#0e7a0d';
-        statusIndicator.title = 'Connected';
     } catch (error) {
-        if (error.name === 'AbortError') {
-            logToServer('INFO', 'Stream aborted by user', { len: answerBuffer.length || reasoningBuffer.length });
-            if (answerBuffer || reasoningBuffer) {
-                finalizeDisplay(usage);
-                await saveChatState();
-            } else if (aiMsgDiv) {
-                aiMsgDiv.remove();
-            }
+        if (liveGenerations.get(chat.id) !== gen) return;
+        if (error.name === 'AbortError' || gen.stopped) {
+            logToServer('INFO', 'Stream stopped by user', { len: answerBuffer.length || reasoningBuffer.length });
         } else {
-            if (aiMsgDiv) {
-                aiMsgDiv.remove();
-            }
             console.error(error);
             showError(error.message || 'Failed to send message');
             logToServer('ERROR', 'Message Send Failed', error.message);
             appendMessageDiv('System', `Error: ${escapeHtml(error.message)}`, 'ai');
         }
+        if (answerBuffer || reasoningBuffer) {
+            finalizeDisplay(usage);
+        } else {
+            aiMsgDiv.remove();
+            removePlaceholder();
+        }
+        await saveChatState();
     } finally {
-        state.isGenerating = false;
-        sendBtn.disabled = false;
-        if (stopBtn) stopBtn.hidden = true;
-        sendBtn.hidden = false;
+        if (liveGenerations.get(chat.id) === gen) {
+            liveGenerations.delete(chat.id);
+            syncComposerState();
+        }
         scrollToBottom();
     }
 }
 
+// --- Ask other models: branch from a question and answer it with several models in parallel ---
+
+const MODEL_BRANCH_LIMIT = 6;
+const modelBranchModal = document.getElementById('model-branch-modal');
+const modelBranchList = document.getElementById('model-branch-list');
+const modelBranchEstimate = document.getElementById('model-branch-estimate');
+const modelBranchSubmit = document.getElementById('model-branch-submit');
+let modelBranchContext = null; // { chat, cutIndex } where cutIndex is just after the question
+
+// Index just after the user message that prompted the assistant message at assistantIndex
+function findTurnEnd(chat, assistantIndex) {
+    for (let i = assistantIndex - 1; i >= 0; i--) {
+        if (chat.messages[i].role === 'user') return i + 1;
+    }
+    return -1;
+}
+
+function openModelBranchModal(chat, assistantIndex) {
+    const cutIndex = findTurnEnd(chat, assistantIndex);
+    if (cutIndex < 1) {
+        showError('There is no question before this answer to branch from');
+        return;
+    }
+    modelBranchContext = { chat, cutIndex };
+    modelBranchModal.style.display = 'block';
+    loadModelsForBranching();
+    updateModelBranchEstimate();
+}
+
+function closeModelBranchModal() {
+    modelBranchModal.style.display = 'none';
+    modelBranchContext = null;
+}
+
+function getSelectedModelBranchTargets() {
+    return [...modelBranchList.querySelectorAll('input[type=checkbox]:checked')]
+        .map(cb => ({ endpointId: cb.dataset.endpoint, modelId: cb.dataset.model }));
+}
+
+function loadModelsForBranching() {
+    modelBranchList.innerHTML = '';
+    const sourceChat = modelBranchContext?.chat;
+    state.endpoints.forEach(ep => {
+        const group = document.createElement('div');
+        group.className = 'model-branch-group';
+        const title = document.createElement('div');
+        title.className = 'model-branch-group-title';
+        title.textContent = ep.name;
+        const status = document.createElement('div');
+        status.className = 'model-branch-status';
+        status.textContent = 'Loading models...';
+        group.append(title, status);
+        modelBranchList.appendChild(group);
+
+        apiFetch(`/api/models?endpointId=${encodeURIComponent(ep.id)}`)
+            .then(async res => {
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || `Status ${res.status}`);
+                return data.data || [];
+            })
+            .then(models => {
+                status.remove();
+                if (!models.length) {
+                    status.textContent = 'No models available';
+                    group.appendChild(status);
+                    return;
+                }
+                models.forEach(m => {
+                    const label = document.createElement('label');
+                    label.className = 'model-branch-option';
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.dataset.endpoint = ep.id;
+                    cb.dataset.model = m.id;
+                    const text = document.createElement('span');
+                    const isCurrent = sourceChat && sourceChat.endpointId === ep.id && sourceChat.modelId === m.id;
+                    text.textContent = isCurrent ? `${m.id} (current)` : m.id;
+                    label.append(cb, text);
+                    group.appendChild(label);
+                });
+            })
+            .catch(err => {
+                status.textContent = `Failed to load models: ${err.message}`;
+                if (!status.isConnected) group.appendChild(status);
+            });
+    });
+}
+
+function updateModelBranchEstimate() {
+    const selected = getSelectedModelBranchTargets();
+    modelBranchSubmit.disabled = selected.length === 0;
+    if (!selected.length || !modelBranchContext) {
+        modelBranchEstimate.textContent = 'Select one or more models';
+        return;
+    }
+    const { chat, cutIndex } = modelBranchContext;
+    const tokens = chat.messages.slice(0, cutIndex).reduce((sum, m) => sum + estimateTokens(m.content), 0);
+    const cost = selected.reduce((sum, t) => {
+        const ep = state.endpoints.find(e => e.id === t.endpointId);
+        return sum + ((ep?.inputCost || 0) * tokens / 1e6);
+    }, 0);
+    modelBranchEstimate.textContent = `${selected.length} selected · about ${tokens.toLocaleString()} input tokens each · about $${cost.toFixed(4)} input cost (output not included)`;
+}
+
+async function createModelBranches() {
+    if (!modelBranchContext) return;
+    const { chat: source, cutIndex } = modelBranchContext;
+    const targets = getSelectedModelBranchTargets();
+    if (!targets.length) return;
+    closeModelBranchModal();
+
+    const branches = targets.map(t => ({
+        id: crypto.randomUUID(),
+        title: `${source.title || 'New Chat'} · ${t.modelId}`,
+        endpointId: t.endpointId,
+        modelId: t.modelId,
+        systemPrompt: source.systemPrompt || '',
+        temperature: source.temperature,
+        messages: JSON.parse(JSON.stringify(source.messages.slice(0, cutIndex))),
+        tags: [...(source.tags || [])],
+        folder: source.folder || DEFAULT_FOLDER,
+        pinned: false,
+        timestamp: Date.now(),
+        parentBranchId: source.id,
+        branchPoint: cutIndex - 1,
+        isBranch: true,
+        isIncognito: !!source.isIncognito
+    }));
+    state.chats.push(...branches);
+    await saveChatState();
+    renderChatList();
+    updateCompareButtonVisibility();
+    await setCurrentChat(branches[0].id);
+    branches.forEach(b => generateAssistantResponse(b));
+    showSuccess(`Started ${branches.length} answer${branches.length > 1 ? 's' : ''} in parallel. Use Compare to view them side by side.`);
+}
+
+modelBranchList.addEventListener('change', (e) => {
+    if (!e.target.matches('input[type=checkbox]')) return;
+    if (getSelectedModelBranchTargets().length > MODEL_BRANCH_LIMIT) {
+        e.target.checked = false;
+        showError(`Choose at most ${MODEL_BRANCH_LIMIT} models at once`);
+    }
+    updateModelBranchEstimate();
+});
+document.getElementById('model-branch-cancel').addEventListener('click', closeModelBranchModal);
+document.getElementById('model-branch-close').addEventListener('click', closeModelBranchModal);
+modelBranchSubmit.addEventListener('click', createModelBranches);
+modelBranchModal.addEventListener('click', (e) => { if (e.target === modelBranchModal) closeModelBranchModal(); });
+if (stopBtn) stopBtn.addEventListener('click', stopGeneration);
+
 async function sendMessage() {
-    if (state.isGenerating) return;
+    if (isChatGenerating(getCurrentChat())) return;
     const text = getInputText().trim();
     if (!text) return;
     if (!modelSelect.value) { alert('Select a model'); return; }
@@ -2006,7 +2615,7 @@ async function sendMessage() {
     const userMsgIndex = chat.messages.length - 1;
     appendMessageDiv('User', null, 'user', uiContent, chat, userMsgIndex, chat.messages[userMsgIndex].createdAt);
 
-    updateChatTitle(chat, text);
+    updateChatTitle(chat);
     await saveChatState();
     scrollToBottom();
 
@@ -2252,62 +2861,9 @@ function activateComposer({ focus = false } = {}) {
 }
 
 function initEasyMDE() {
-    try {
-        // Always use simple textarea for better reliability
-        console.log('Using simple textarea instead of EasyMDE');
-        setupSimpleTextarea();
-        return;
-        
-        if (typeof EasyMDE === 'undefined') {
-            console.warn('EasyMDE not loaded, falling back to simple textarea');
-            setupSimpleTextarea();
-            return;
-        }
-
-        window.easyMDE = new EasyMDE({
-            element: document.getElementById('user-input'),
-            autoDownloadFontAwesome: true, // Needed for icons
-            status: false,
-            spellChecker: false,
-            toolbar: false,
-            forceSync: true,
-            placeholder: "Message AI...",
-            minHeight: "0px",
-            maxHeight: "120px",
-            shortcuts: {
-                "togglePreview": null, // Keep preview button but maybe disable shortcut if it conflicts
-            },
-        });
-
-        // Force compact CodeMirror height
-        window.easyMDE.codemirror.setSize('100%', 'auto');
-        const cm = window.easyMDE.codemirror.getWrapperElement();
-        if (cm) {
-            cm.style.height = 'auto';
-            cm.style.minHeight = '0px';
-            cm.style.maxHeight = '120px';
-        }
-        window.easyMDE.codemirror.refresh();
-
-        // Custom Key Handler for Enter to Send
-        window.easyMDE.codemirror.setOption("extraKeys", {
-            "Enter": function (cm) {
-                sendMessage();
-            },
-            "Shift-Enter": function (cm) {
-                cm.replaceSelection("\n");
-            }
-        });
-
-        // Update Send Button state on input
-        window.easyMDE.codemirror.on("change", () => {
-            const val = window.easyMDE.value().trim();
-            sendBtn.disabled = val === '';
-        });
-    } catch (e) {
-        console.error('EasyMDE initialization failed:', e);
-        setupSimpleTextarea();
-    }
+    // Always use simple textarea for better reliability
+    console.log('Using simple textarea instead of EasyMDE');
+    setupSimpleTextarea();
 }
 
 function setupSimpleTextarea() {
@@ -2397,6 +2953,61 @@ document.querySelectorAll('.prompt-card').forEach(card => {
         activateComposer({ focus: true });
     });
 });
+
+// Close chat menus when clicking outside
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.chat-menu-btn') && !e.target.closest('.chat-menu-dropdown')) {
+        document.querySelectorAll('.chat-menu-dropdown.open').forEach(menu => {
+            menu.classList.remove('open');
+        });
+    }
+    // Close folder menu if clicking outside
+    const folderMenu = document.querySelector('.folder-menu');
+    if (folderMenu && !e.target.closest('.folder-menu') && !e.target.closest('.chat-menu-action')) {
+        folderMenu.remove();
+    }
+});
+
+// Action bar listeners
+const actionCopy = document.getElementById('action-copy');
+const actionRegenerate = document.getElementById('action-regenerate');
+const actionBranch = document.getElementById('action-branch');
+
+if (actionCopy) {
+    actionCopy.addEventListener('click', () => {
+        const lastMessage = document.querySelector('.message.ai:last-of-type .message-content');
+        if (lastMessage) {
+            navigator.clipboard.writeText(lastMessage.innerText);
+            const originalText = actionCopy.innerHTML;
+            actionCopy.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+            setTimeout(() => {
+                actionCopy.innerHTML = originalText;
+            }, 1500);
+        }
+    });
+}
+
+if (actionRegenerate) {
+    actionRegenerate.addEventListener('click', () => {
+        const currentChat = getCurrentChat();
+        if (currentChat && currentChat.messages.length > 0) {
+            const lastMsgIndex = currentChat.messages.length - 1;
+            if (currentChat.messages[lastMsgIndex].role === 'assistant') {
+                regenerateAssistantMessage(currentChat, lastMsgIndex);
+            }
+        }
+    });
+}
+
+if (actionBranch) {
+    actionBranch.addEventListener('click', () => {
+        const currentChat = getCurrentChat();
+        if (currentChat && currentChat.messages.length > 0) {
+            createBranchFromPoint(currentChat, currentChat.messages.length - 1);
+        }
+    });
+}
+
 // Note: EasyMDE handles Enter key via its extraKeys configuration
 
 document.addEventListener('keydown', (e) => {
@@ -2428,6 +3039,12 @@ newChatBtn.addEventListener('click', async () => {
 incognitoChatBtn.addEventListener('click', async () => {
     await createIncognitoChat();
 });
+
+if (regenerateTitlesBtn) {
+    regenerateTitlesBtn.addEventListener('click', async () => {
+        await regenerateAllUntitledChats();
+    });
+}
 
 menuBtn.addEventListener('click', () => {
     sidebar.classList.toggle('open');
@@ -2852,6 +3469,7 @@ function renderImagePreviews() {
 // --- Global Error Handling ---
 
 function showError(message) {
+    recordNotification('error', message);
     let toast = document.querySelector('.error-toast');
     if (!toast) {
         toast = document.createElement('div');
@@ -2881,6 +3499,7 @@ function showError(message) {
 }
 
 function showSuccess(message) {
+    recordNotification('success', message);
     let toast = document.querySelector('.success-toast');
     if (!toast) {
         toast = document.createElement('div');

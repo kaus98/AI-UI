@@ -16,24 +16,38 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 // Optional Cloudflare proxy for outbound AI calls
 const PROXY_BASE_URL = (process.env.CLOUDFLARE_PROXY_BASE_URL || process.env.PROXY_BASE_URL || '').replace(/\/+$/, '');
 
+// --- File write serialization ---
+
+const fileQueues = new Map();
+
+// Runs tasks touching the same file one at a time, so read-modify-write cycles cannot interleave
+function withFileLock(file, task) {
+    const run = (fileQueues.get(file) || Promise.resolve()).then(task);
+    fileQueues.set(file, run.catch(() => {}));
+    return run;
+}
+
+// Write to a temp file first so a crash mid-write cannot leave a truncated JSON file
+async function writeJsonAtomic(file, data) {
+    const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await fsPromises.writeFile(tmp, JSON.stringify(data, null, 2));
+    await fsPromises.rename(tmp, file);
+}
+
 // --- Config Configuration ---
 
 function generateUnifiedApiKey() {
     return 'ag-' + crypto.randomBytes(32).toString('hex');
 }
 
-async function getConfig() {
+async function readConfig() {
     let config;
-    let configExisted = false;
-    let isNewConfig = false;
     try {
         const data = await fsPromises.readFile(CONFIG_FILE, 'utf8');
         config = JSON.parse(data);
-        configExisted = true;
     } catch (e) {
         console.error('Failed to load config.json:', e.message);
         config = { endpoints: [], currentEndpointId: null, unifiedApiKey: null };
-        isNewConfig = true;
         if (e.code !== 'ENOENT') {
             // Back up a corrupt config file before we overwrite it.
             try {
@@ -111,15 +125,12 @@ async function getConfig() {
         }
     ];
     const knownIds = new Set(config.tools.map(t => t.id));
-    let addedTool = false;
+    let changed = false;
     for (const tool of defaultTools) {
         if (!knownIds.has(tool.id)) {
             config.tools.push(tool);
-            addedTool = true;
+            changed = true;
         }
-    }
-    if (addedTool) {
-        try { await saveConfig(config); } catch (e) { console.error('Failed to save default tools:', e); }
     }
 
     // Ensure search engine setting exists
@@ -129,18 +140,30 @@ async function getConfig() {
     if (!config.unifiedApiKey) {
         config.unifiedApiKey = generateUnifiedApiKey();
         console.log('Generated Unified API Key:', config.unifiedApiKey);
-        try {
-            await saveConfig(config);
-        } catch (saveErr) {
-            console.error('Failed to save generated unified API key:', saveErr);
-        }
+        changed = true;
     }
 
+    return { config, changed };
+}
+
+async function getConfig() {
+    const { config, changed } = await readConfig();
+    if (changed) await saveConfig(config).catch(e => console.error('Failed to save config defaults:', e));
     return config;
 }
 
-async function saveConfig(config) {
-    await fsPromises.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+// Apply a change to config.json under the file lock. The mutator must not call getConfig/saveConfig.
+function updateConfig(mutator) {
+    return withFileLock(CONFIG_FILE, async () => {
+        const { config } = await readConfig();
+        const result = await mutator(config);
+        await writeJsonAtomic(CONFIG_FILE, config);
+        return result;
+    });
+}
+
+function saveConfig(config) {
+    return withFileLock(CONFIG_FILE, () => writeJsonAtomic(CONFIG_FILE, config));
 }
 
 // --- History Configuration ---
@@ -153,8 +176,8 @@ async function getHistory() {
     }
 }
 
-async function saveHistory(chats) {
-    await fsPromises.writeFile(CHATS_FILE, JSON.stringify(chats, null, 2));
+function saveHistory(chats) {
+    return withFileLock(CHATS_FILE, () => writeJsonAtomic(CHATS_FILE, chats));
 }
 
 function getEndpoint(config, id) {
@@ -173,8 +196,17 @@ async function getCachedModels() {
     }
 }
 
-async function saveCachedModels(models) {
-    await fsPromises.writeFile(MODELS_FILE, JSON.stringify(models, null, 2));
+function saveCachedModels(models) {
+    return withFileLock(MODELS_FILE, () => writeJsonAtomic(MODELS_FILE, models));
+}
+
+function updateCachedModels(mutator) {
+    return withFileLock(MODELS_FILE, async () => {
+        const models = await getCachedModels();
+        const result = await mutator(models);
+        await writeJsonAtomic(MODELS_FILE, models);
+        return result;
+    });
 }
 
 // --- OAuth Logic ---
@@ -182,7 +214,7 @@ async function saveCachedModels(models) {
 // In-memory token cache (lost on server restart, ensuring fresh session tokens)
 const tokenCache = {}; // Map<endpointId, { token, expiresAt }>
 
-async function getOrRefreshAccessToken(endpoint, config) {
+async function getOrRefreshAccessToken(endpoint) {
     // 1. If not OAuth, return API key (shim)
     if (endpoint.authType !== 'oauth2') {
         return endpoint.apiKey || null;
@@ -245,7 +277,7 @@ function buildAiUrl(baseUrl, openaiPath, config = null) {
 
 // Helper to fetch from a single endpoint
 async function fetchModelsFromEndpoint(endpoint, config) {
-    const authToken = await getOrRefreshAccessToken(endpoint, config);
+    const authToken = await getOrRefreshAccessToken(endpoint);
     const targetUrl = buildAiUrl(endpoint.baseUrl, '/models', config);
 
     logToFile('server', `Fetching models from ${endpoint.name}`, { url: targetUrl });
@@ -289,11 +321,15 @@ async function fetchModelsFromEndpoint(endpoint, config) {
 module.exports = {
     getConfig,
     saveConfig,
+    updateConfig,
+    withFileLock,
+    writeJsonAtomic,
     getHistory,
     saveHistory,
     getEndpoint,
     getCachedModels,
     saveCachedModels,
+    updateCachedModels,
     getOrRefreshAccessToken,
     fetchModelsFromEndpoint,
     buildAiUrl,

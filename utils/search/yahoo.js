@@ -1,6 +1,6 @@
 const { fetchWithTimeout, stripHtmlTags, getRandomUserAgent, sleepWithJitter } = require('./helpers');
 const { createDriver, savePageAnalysis, analyzeSelectors, extractResultsFromLinks, waitForResults } = require('./selenium');
-const { By, until } = require('selenium-webdriver');
+const { By } = require('selenium-webdriver');
 const { logSearch } = require('./logger');
 const fs = require('fs');
 const path = require('path');
@@ -29,7 +29,7 @@ async function searchYahooSelenium(query, limit = 10) {
         // Small stability wait with jitter
         await sleepWithJitter(1000, 2000);
         
-        await savePageAnalysis(driver, 'yahoo', query);
+        await savePageAnalysis(driver, 'yahoo');
         
         const selectors = [
             'a[href*="http"]',

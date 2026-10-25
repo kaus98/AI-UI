@@ -9,10 +9,9 @@ if (process.env.ALLOW_INSECURE_TLS === 'true') {
 const express = require('express');
 const path = require('path');
 const { logToFile } = require('./utils/logger');
+const { addNotification } = require('./utils/notifications');
 
 // Config
-const LOGS_DIR = path.join(__dirname, 'logs');
-
 // Middleware Setup
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -31,7 +30,7 @@ app.use((req, res, next) => {
 });
 
 // Serve static content (no-cache to avoid stale JS/CSS/index.html during debugging)
-const noCacheHeaders = (res, filePath) => {
+const noCacheHeaders = (res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -82,6 +81,9 @@ app.use((req, res, next) => {
             ? bodyString.slice(0, 1200) + '... [truncated]'
             : (bodyString || 'null');
 
+        if (res.statusCode >= 500) {
+            addNotification({ level: 'error', source: 'server', message: `${req.method} ${req.originalUrl} failed with status ${res.statusCode}`, details: { duration: `${duration}ms` } }).catch(() => {});
+        }
         logToFile('request', `${req.method} ${req.originalUrl} -> ${res.statusCode} (${duration}ms)`, {
             status: res.statusCode,
             duration: `${duration}ms`,

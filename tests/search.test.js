@@ -60,21 +60,6 @@ async function testSearchWebYahoo() {
     }
 }
 
-async function testSearchWebStartpage() {
-    console.log('Testing searchWeb with specific engine (startpage)...');
-    try {
-        const results = await searchWeb('test query', 5, 'startpage');
-        console.log(`searchWeb (startpage) returned ${results.length} results`);
-        if (results.length > 0) {
-            console.log('Sample result:', results[0]);
-        }
-        return results.length > 0;
-    } catch (e) {
-        console.error('searchWeb (startpage) failed:', e.message);
-        return false;
-    }
-}
-
 async function runTests() {
     console.log('=== Web Search Scraper Tests ===\n');
     

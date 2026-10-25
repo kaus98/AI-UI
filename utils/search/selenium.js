@@ -109,7 +109,7 @@ async function waitForResults(driver, timeout = 5000) {
     }
 }
 
-async function savePageAnalysis(driver, engine, query) {
+async function savePageAnalysis(driver, engine) {
     const timestamp = Date.now();
     const pageHtml = await driver.getPageSource();
     const screenshot = await driver.takeScreenshot();

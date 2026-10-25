@@ -1,14 +1,15 @@
+const crypto = require('crypto');
 const express = require('express');
 const router = express.Router();
 const { logToFile } = require('../utils/logger');
 const {
     getConfig,
-    saveConfig,
+    updateConfig,
     getHistory,
     saveHistory,
     getEndpoint,
     getCachedModels,
-    saveCachedModels,
+    updateCachedModels,
     getOrRefreshAccessToken,
     fetchModelsFromEndpoint,
     buildAiUrl,
@@ -16,45 +17,8 @@ const {
 } = require('../utils/helpers');
 const { searchDuckDuckGo } = require('../utils/search');
 const { executeTool, setSearchEngine } = require('../utils/tools');
-
-function sendSseDelta(res, content) {
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content } }] }) }\n\n`);
-}
-
-function sendSseDone(res) {
-    res.write('data: [DONE]\n\n');
-    res.end();
-}
-
-async function pipeUpstreamToClient(response, res) {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let streamEnded = false;
-
-    res.on('error', (err) => {
-        if (!streamEnded) {
-            streamEnded = true;
-            console.error('Response stream error:', err.message);
-            try { reader.cancel(); } catch {}
-        }
-    });
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (streamEnded) break;
-        const chunk = decoder.decode(value, { stream: true });
-        res.write(chunk);
-        if (typeof res.flush === 'function') res.flush();
-    }
-    if (!streamEnded) {
-        streamEnded = true;
-        res.end();
-    }
-}
+const { createJob, getJob, appendToJob, finishJob, cancelJob, pipeUpstreamToJob, streamJob, sseData } = require('../utils/jobs');
+const { addNotification, getNotifications, clearNotifications } = require('../utils/notifications');
 
 function pseudoArgsToObject(argsStr) {
     const obj = {};
@@ -119,7 +83,6 @@ router.get('/endpoints', async (req, res) => {
 
 router.post('/endpoints', async (req, res) => {
     try {
-        const config = await getConfig();
         const { id, name, apiKey, baseUrl, authType, tokenUrl, clientId, clientSecret, scope, systemPrompt, defaultModel, stream, inputCost, outputCost } = req.body;
 
         // Normalize numeric/boolean fields
@@ -127,37 +90,38 @@ router.post('/endpoints', async (req, res) => {
         const parsedOutputCost = Number.isNaN(Number(outputCost)) ? 0 : Number(outputCost);
         const parsedStream = stream !== false;
 
-        let endpoint = config.endpoints.find(e => e.id === id);
-        let resolvedId = id; // track the ID for cache clearing later
+        const resolvedId = await updateConfig(config => {
+            const endpoint = config.endpoints.find(e => e.id === id);
 
-        if (endpoint) {
-            // Update
-            endpoint.name = name;
-            endpoint.baseUrl = baseUrl;
-            if (apiKey) endpoint.apiKey = apiKey; // Only overwrite key if a new one was provided
-            endpoint.systemPrompt = systemPrompt || '';
-            endpoint.defaultModel = defaultModel || '';
-            endpoint.stream = parsedStream;
-            endpoint.inputCost = parsedInputCost;
-            endpoint.outputCost = parsedOutputCost;
+            if (endpoint) {
+                // Update
+                endpoint.name = name;
+                endpoint.baseUrl = baseUrl;
+                if (apiKey) endpoint.apiKey = apiKey; // Only overwrite key if a new one was provided
+                endpoint.systemPrompt = systemPrompt || '';
+                endpoint.defaultModel = defaultModel || '';
+                endpoint.stream = parsedStream;
+                endpoint.inputCost = parsedInputCost;
+                endpoint.outputCost = parsedOutputCost;
 
-            // OAuth updates
-            endpoint.authType = authType || 'api-key';
-            if (tokenUrl !== undefined) endpoint.tokenUrl = tokenUrl || null;
-            if (clientId !== undefined) endpoint.clientId = clientId || null;
-            if (clientSecret) endpoint.clientSecret = clientSecret; // Only overwrite if provided
-            if (scope !== undefined) endpoint.scope = scope || null;
+                // OAuth updates
+                endpoint.authType = authType || 'api-key';
+                if (tokenUrl !== undefined) endpoint.tokenUrl = tokenUrl || null;
+                if (clientId !== undefined) endpoint.clientId = clientId || null;
+                if (clientSecret) endpoint.clientSecret = clientSecret; // Only overwrite if provided
+                if (scope !== undefined) endpoint.scope = scope || null;
 
-            // Reset token cache if creds change
-            if (clientId || clientSecret || tokenUrl) {
-                delete tokenCache[endpoint.id];
+                // Reset token cache if creds change
+                if (clientId || clientSecret || tokenUrl) {
+                    delete tokenCache[endpoint.id];
+                }
+                return endpoint.id;
             }
-            resolvedId = endpoint.id;
-        } else {
+
             // Create
-            resolvedId = id || Date.now().toString();
+            const newId = id || Date.now().toString();
             config.endpoints.push({
-                id: resolvedId,
+                id: newId,
                 name,
                 apiKey: apiKey || null,
                 baseUrl,
@@ -173,18 +137,14 @@ router.post('/endpoints', async (req, res) => {
                 outputCost: parsedOutputCost
             });
             // If first one, set as default
-            if (config.endpoints.length === 1) config.currentEndpointId = resolvedId;
-        }
-
-        await saveConfig(config);
+            if (config.endpoints.length === 1) config.currentEndpointId = newId;
+            return newId;
+        });
 
         // Clear cached models for this endpoint so the next fetch picks up the new source
-        const affectedId = resolvedId;
-        const cachedModels = await getCachedModels();
-        if (cachedModels[affectedId]) {
-            delete cachedModels[affectedId];
-            await saveCachedModels(cachedModels);
-        }
+        await updateCachedModels(cachedModels => {
+            if (cachedModels[resolvedId]) delete cachedModels[resolvedId];
+        });
 
         res.json({ success: true });
     } catch (e) {
@@ -194,19 +154,17 @@ router.post('/endpoints', async (req, res) => {
 
 router.delete('/endpoints/:id', async (req, res) => {
     try {
-        const config = await getConfig();
-        config.endpoints = config.endpoints.filter(e => e.id !== req.params.id);
-        if (config.currentEndpointId === req.params.id) {
-            config.currentEndpointId = config.endpoints.length > 0 ? config.endpoints[0].id : null;
-        }
-        await saveConfig(config);
+        await updateConfig(config => {
+            config.endpoints = config.endpoints.filter(e => e.id !== req.params.id);
+            if (config.currentEndpointId === req.params.id) {
+                config.currentEndpointId = config.endpoints.length > 0 ? config.endpoints[0].id : null;
+            }
+        });
 
         // Clear cached models for the deleted endpoint
-        const cachedModels = await getCachedModels();
-        if (cachedModels[req.params.id]) {
-            delete cachedModels[req.params.id];
-            await saveCachedModels(cachedModels);
-        }
+        await updateCachedModels(cachedModels => {
+            if (cachedModels[req.params.id]) delete cachedModels[req.params.id];
+        });
 
         res.json({ success: true });
     } catch (e) {
@@ -216,15 +174,44 @@ router.delete('/endpoints/:id', async (req, res) => {
 
 router.post('/endpoints/select', async (req, res) => {
     try {
-        const config = await getConfig();
-        config.currentEndpointId = req.body.id;
-        await saveConfig(config);
+        await updateConfig(config => {
+            config.currentEndpointId = req.body.id;
+        });
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
+
+// --- Notifications API ---
+
+router.get('/notifications', async (req, res) => {
+    try {
+        res.json(await getNotifications());
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to read notifications' });
+    }
+});
+
+router.post('/notifications', async (req, res) => {
+    const { level, message, details } = req.body || {};
+    if (!message || typeof message !== 'string') return res.status(400).json({ error: 'message is required' });
+    try {
+        res.json(await addNotification({ level, source: 'client', message, details }));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to save notification' });
+    }
+});
+
+router.delete('/notifications', async (req, res) => {
+    try {
+        await clearNotifications();
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to clear notifications' });
+    }
+});
 
 // --- History API ---
 
@@ -274,8 +261,9 @@ router.get('/models', async (req, res) => {
         const models = await fetchModelsFromEndpoint(endpoint, config);
 
         // Save to cache
-        cachedModels[endpointId] = models;
-        await saveCachedModels(cachedModels);
+        await updateCachedModels(cache => {
+            cache[endpointId] = models;
+        });
 
         res.json({ object: 'list', data: models });
     } catch (error) {
@@ -301,7 +289,7 @@ router.post('/models', async (req, res) => {
 router.post('/models/refresh', async (req, res) => {
     try {
         const config = await getConfig();
-        const cachedModels = await getCachedModels();
+        const fresh = {};
         const results = {};
 
         console.log('Refreshing all models...');
@@ -310,7 +298,7 @@ router.post('/models/refresh', async (req, res) => {
         await Promise.all(config.endpoints.map(async (endpoint) => {
             try {
                 const models = await fetchModelsFromEndpoint(endpoint, config);
-                cachedModels[endpoint.id] = models;
+                fresh[endpoint.id] = models;
                 results[endpoint.name] = 'Success';
             } catch (e) {
                 console.error(`Failed to refresh ${endpoint.name}:`, e.message);
@@ -318,191 +306,230 @@ router.post('/models/refresh', async (req, res) => {
             }
         }));
 
-        await saveCachedModels(cachedModels);
+        await updateCachedModels(cachedModels => Object.assign(cachedModels, fresh));
         res.json({ success: true, results });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-router.post('/chat', async (req, res) => {
-    try {
-        const config = await getConfig();
-        let endpoint = null;
-        if (req.body.endpoint && req.body.endpoint.baseUrl) {
-            endpoint = req.body.endpoint;
-        } else {
-            const endpointId = req.body.endpointId || config.currentEndpointId;
-            endpoint = getEndpoint(config, endpointId);
-        }
+function upstreamErrorMessage(status, errorData) {
+    const detail = errorData?.error?.message || errorData?.error || errorData?.message || 'Request failed';
+    return `Upstream error ${status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`;
+}
 
-        if (!endpoint) throw new Error('No endpoint configured');
+function sseDelta(job, delta, extra = {}) {
+    appendToJob(job, sseData({ choices: [{ delta }], ...extra }));
+}
 
-        const authToken = await getOrRefreshAccessToken(endpoint, config);
+function appendCompletion(job, data) {
+    const message = data.choices?.[0]?.message || {};
+    const delta = { content: message.content || '' };
+    const reasoning = message.reasoning_content || message.reasoning;
+    if (reasoning) delta.reasoning_content = reasoning;
+    sseDelta(job, delta, data.usage ? { usage: data.usage } : {});
+}
 
-        // Disable tools for localhost endpoints (local models like LLaMA don't support function calling)
-        const isLocalhost = endpoint.baseUrl.includes('localhost') || endpoint.baseUrl.includes('127.0.0.1');
-        let availableTools = [];
-        let toolsForLLM = [];
-        
-        if (!isLocalhost) {
-            const activeToolIds = Array.isArray(req.body.activeTools)
-                ? req.body.activeTools
-                : (config.tools || []).filter(t => t.enabled).map(t => t.id);
-            availableTools = (config.tools || []).filter(t => activeToolIds.includes(t.id));
-            toolsForLLM = availableTools.map(t => ({
-                type: 'function',
-                function: { name: t.name, description: t.description, parameters: t.parameters }
-            }));
-        } else {
-            console.log('Tools disabled for localhost endpoint');
-        }
+async function generateChat(job, body) {
+    const config = await getConfig();
+    let endpoint = null;
+    if (body.endpoint && body.endpoint.baseUrl) {
+        endpoint = body.endpoint;
+    } else {
+        const endpointId = body.endpointId || config.currentEndpointId;
+        endpoint = getEndpoint(config, endpointId);
+    }
 
-        // Prepare body (remove custom fields)
-        const { endpointId: _, endpoint: __, messages, activeTools, ...restBody } = req.body;
+    if (!endpoint) throw new Error('No endpoint configured');
+    const signal = job.controller.signal;
 
-        // Sanitize messages: only send role and content to upstream APIs
-        const sanitizedMessages = messages.map(msg => ({
-            role: msg.role,
-            content: msg.content
+    const authToken = await getOrRefreshAccessToken(endpoint);
+
+    // Disable tools for localhost endpoints (local models like LLaMA don't support function calling)
+    const isLocalhost = endpoint.baseUrl.includes('localhost') || endpoint.baseUrl.includes('127.0.0.1');
+    let availableTools = [];
+    let toolsForLLM = [];
+
+    if (!isLocalhost) {
+        const activeToolIds = Array.isArray(body.activeTools)
+            ? body.activeTools
+            : (config.tools || []).filter(t => t.enabled).map(t => t.id);
+        availableTools = (config.tools || []).filter(t => activeToolIds.includes(t.id));
+        toolsForLLM = availableTools.map(t => ({
+            type: 'function',
+            function: { name: t.name, description: t.description, parameters: t.parameters }
         }));
+    } else {
+        console.log('Tools disabled for localhost endpoint');
+    }
 
-        let chatBody = { ...restBody, messages: sanitizedMessages };
-        
-        // Ensure stream parameter is preserved (default to true if not specified)
-        if (chatBody.stream === undefined) {
-            chatBody.stream = true;
-        }
+    // Prepare body (remove custom fields)
+    const { endpointId: _, endpoint: __, jobId: ___, messages, activeTools, ...restBody } = body;
 
-        const targetUrl = buildAiUrl(endpoint.baseUrl, '/chat/completions', config);
-        console.log(`Sending chat to: ${targetUrl}`);
-        
-        // Force streaming for localhost endpoints (for local models like LLaMA server)
-        // isLocalhost is already defined above, so we just use it here
-        if (isLocalhost) {
-            chatBody.stream = true;
-            console.log('Forcing streaming for localhost endpoint');
-        }
-        
-        console.log('Chat request stream setting:', chatBody.stream);
+    // Sanitize messages: only send role and content to upstream APIs
+    const sanitizedMessages = messages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+    }));
 
-        const headers = { 'Content-Type': 'application/json' };
-        if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    let chatBody = { ...restBody, messages: sanitizedMessages };
 
-        // If tools are active, do a non-stream call first to detect tool calls
-        if (toolsForLLM.length > 0 && !isLocalhost) {
-            chatBody = { ...chatBody, tools: toolsForLLM, tool_choice: 'auto', stream: false };
-            if (!chatBody.messages.some(m => m.role === 'system')) {
-                chatBody.messages.unshift({
-                    role: 'system',
-                    content: 'You have access to the web_search tool. Use it when the question requires current, factual, or real-time information. Cite sources by number if search results are used.'
-                });
-            }
+    // Ensure stream parameter is preserved (default to true if not specified)
+    if (chatBody.stream === undefined) {
+        chatBody.stream = true;
+    }
 
-            const response = await fetch(targetUrl, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(chatBody),
+    const targetUrl = buildAiUrl(endpoint.baseUrl, '/chat/completions', config);
+    console.log(`Sending chat to: ${targetUrl}`);
+
+    // Force streaming for localhost endpoints (for local models like LLaMA server)
+    if (isLocalhost) {
+        chatBody.stream = true;
+        console.log('Forcing streaming for localhost endpoint');
+    }
+
+    console.log('Chat request stream setting:', chatBody.stream);
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+    // If tools are active, do a non-stream call first to detect tool calls
+    if (toolsForLLM.length > 0 && !isLocalhost) {
+        chatBody = { ...chatBody, tools: toolsForLLM, tool_choice: 'auto', stream: false };
+        if (!chatBody.messages.some(m => m.role === 'system')) {
+            chatBody.messages.unshift({
+                role: 'system',
+                content: 'You have access to the web_search tool. Use it when the question requires current, factual, or real-time information. Cite sources by number if search results are used.'
             });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
-                return res.status(response.status).json(errorData);
-            }
-
-            const data = await response.json();
-            const choice = data.choices && data.choices[0];
-            const message = choice && choice.message;
-
-            const rawToolCalls = (message && message.tool_calls) || [];
-            const customToolCalls = parseCustomToolCalls(message && message.content);
-            const calls = rawToolCalls.length ? rawToolCalls : customToolCalls;
-
-            if (calls && calls.length) {
-                const toolResults = [];
-                for (const tc of calls) {
-                    const tool = availableTools.find(t => t.name === tc.function.name);
-                    let result = 'Tool not implemented.';
-                    if (tool) {
-                        const args = JSON.parse(tc.function.arguments || '{}');
-                        try {
-                            result = await executeTool(tool, args);
-                        } catch (e) {
-                            result = `Tool error: ${e.cause?.code || e.cause?.message || e.message}`;
-                        }
-                    }
-                    toolResults.push({ id: tc.id, result });
-                }
-
-                const newMessages = [...sanitizedMessages];
-                newMessages.push({
-                    role: 'assistant',
-                    content: customToolCalls.length ? null : (message.content || null),
-                    tool_calls: calls
-                });
-                for (let i = 0; i < calls.length; i++) {
-                    newMessages.push({
-                        role: 'tool',
-                        tool_call_id: toolResults[i].id,
-                        content: toolResults[i].result
-                    });
-                }
-
-                const finalBody = { ...restBody, messages: newMessages, stream: true };
-                console.log('Tool execution complete, making final streaming call');
-                const finalResponse = await fetch(targetUrl, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify(finalBody),
-                });
-
-                if (!finalResponse.ok) {
-                    const errorData = await finalResponse.json().catch(() => ({ error: 'Failed to parse error response' }));
-                    return res.status(finalResponse.status).json(errorData);
-                }
-                await pipeUpstreamToClient(finalResponse, res);
-                return;
-            }
-
-            // No tool call was made, return the answer as a single SSE
-            const answer = (message && message.content) || '';
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            sendSseDelta(res, answer);
-            sendSseDone(res);
-            return;
         }
 
-        // No tools: original behavior
-        console.log('No tools active, using stream setting:', chatBody.stream);
         const response = await fetch(targetUrl, {
             method: 'POST',
             headers,
             body: JSON.stringify(chatBody),
+            signal
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
-            console.error('Upstream API Error:', response.status, errorData);
-            return res.status(response.status).json(errorData);
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(upstreamErrorMessage(response.status, errorData));
         }
 
-        if (chatBody.stream && response.body) {
-            console.log('Streaming response from upstream API');
-            await pipeUpstreamToClient(response, res);
+        const data = await response.json();
+        const choice = data.choices && data.choices[0];
+        const message = choice && choice.message;
+
+        const rawToolCalls = (message && message.tool_calls) || [];
+        const customToolCalls = parseCustomToolCalls(message && message.content);
+        const calls = rawToolCalls.length ? rawToolCalls : customToolCalls;
+
+        if (calls && calls.length) {
+            const toolResults = [];
+            for (const tc of calls) {
+                const tool = availableTools.find(t => t.name === tc.function.name);
+                let result = 'Tool not implemented.';
+                if (tool) {
+                    try {
+                        result = await executeTool(tool, JSON.parse(tc.function.arguments || '{}'));
+                    } catch (e) {
+                        result = `Tool error: ${e.cause?.code || e.cause?.message || e.message}`;
+                    }
+                }
+                toolResults.push({ id: tc.id, result });
+            }
+
+            const newMessages = [...sanitizedMessages];
+            newMessages.push({
+                role: 'assistant',
+                content: customToolCalls.length ? null : (message.content || null),
+                tool_calls: calls
+            });
+            for (let i = 0; i < calls.length; i++) {
+                newMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolResults[i].id,
+                    content: toolResults[i].result
+                });
+            }
+
+            const finalBody = { ...restBody, messages: newMessages, stream: true };
+            console.log('Tool execution complete, making final streaming call');
+            const finalResponse = await fetch(targetUrl, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(finalBody),
+                signal
+            });
+
+            if (!finalResponse.ok) {
+                const errorData = await finalResponse.json().catch(() => ({}));
+                throw new Error(upstreamErrorMessage(finalResponse.status, errorData));
+            }
+            await pipeUpstreamToJob(finalResponse, job);
             return;
         }
 
-        console.log('Non-streaming response from upstream API');
-        const data = await response.json();
-        res.json(data);
-    } catch (error) {
-        console.error('Error in chat completion:', error.message);
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'Failed to get chat completion' });
-        }
+        // No tool call was made, return the answer as a single delta
+        sseDelta(job, { content: (message && message.content) || '' });
+        return;
     }
+
+    // No tools: original behavior
+    console.log('No tools active, using stream setting:', chatBody.stream);
+    const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(chatBody),
+        signal
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Upstream API Error:', response.status, errorData);
+        throw new Error(upstreamErrorMessage(response.status, errorData));
+    }
+
+    if (chatBody.stream && response.body) {
+        console.log('Streaming response from upstream API');
+        await pipeUpstreamToJob(response, job);
+        return;
+    }
+
+    console.log('Non-streaming response from upstream API');
+    appendCompletion(job, await response.json());
+}
+
+async function runChatJob(job, body) {
+    try {
+        await generateChat(job, body);
+        finishJob(job, 'done');
+    } catch (error) {
+        if (job.controller.signal.aborted) return finishJob(job, 'cancelled');
+        console.error('Error in chat completion:', error.message);
+        finishJob(job, 'error', error.message || 'Failed to get chat completion');
+    }
+}
+
+// Generations run as jobs: the upstream call continues even if this HTTP connection drops.
+router.post('/chat', (req, res) => {
+    const jobId = req.body.jobId || crypto.randomUUID();
+    if (getJob(jobId)) return res.status(409).json({ error: 'A generation with this job ID already exists' });
+    const job = createJob(jobId);
+    runChatJob(job, req.body);
+    streamJob(job, res, 0);
+});
+
+router.get('/jobs/:id/stream', (req, res) => {
+    const job = getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    streamJob(job, res, Number(req.query.offset) || 0);
+});
+
+router.post('/jobs/:id/cancel', (req, res) => {
+    const job = getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    cancelJob(job);
+    res.json({ status: job.status });
 });
 
 // DuckDuckGo web search
@@ -534,12 +561,14 @@ router.get('/tools', async (req, res) => {
 
 router.post('/tools/:id', async (req, res) => {
     try {
-        const config = await getConfig();
-        const tool = (config.tools || []).find(t => t.id === req.params.id);
-        if (!tool) return res.status(404).json({ error: 'Tool not found' });
-        if (typeof req.body.enabled === 'boolean') tool.enabled = req.body.enabled;
-        await saveConfig(config);
-        res.json({ tools: config.tools, searchEngine: config.searchEngine || 'auto' });
+        const result = await updateConfig(config => {
+            const tool = (config.tools || []).find(t => t.id === req.params.id);
+            if (!tool) return null;
+            if (typeof req.body.enabled === 'boolean') tool.enabled = req.body.enabled;
+            return { tools: config.tools, searchEngine: config.searchEngine || 'auto' };
+        });
+        if (!result) return res.status(404).json({ error: 'Tool not found' });
+        res.json(result);
     } catch (e) {
         console.error('Tools update error:', e.message);
         res.status(500).json({ error: e.message });
@@ -548,14 +577,14 @@ router.post('/tools/:id', async (req, res) => {
 
 router.post('/search-engine', async (req, res) => {
     try {
-        const config = await getConfig();
         const { engine } = req.body;
-        if (engine && ['auto', 'duckduckgo', 'bing', 'yahoo', 'startpage'].includes(engine)) {
-            config.searchEngine = engine;
-            await saveConfig(config);
-            setSearchEngine(engine);
-        }
-        res.json({ searchEngine: config.searchEngine || 'auto' });
+        const valid = !!engine && ['auto', 'duckduckgo', 'bing', 'yahoo', 'startpage'].includes(engine);
+        const searchEngine = await updateConfig(config => {
+            if (valid) config.searchEngine = engine;
+            return config.searchEngine || 'auto';
+        });
+        if (valid) setSearchEngine(engine);
+        res.json({ searchEngine });
     } catch (e) {
         console.error('Search engine update error:', e.message);
         res.status(500).json({ error: e.message });
@@ -564,11 +593,12 @@ router.post('/search-engine', async (req, res) => {
 
 router.post('/proxy-base-url', async (req, res) => {
     try {
-        const config = await getConfig();
         const { proxyBaseUrl } = req.body;
-        config.proxyBaseUrl = proxyBaseUrl || '';
-        await saveConfig(config);
-        res.json({ proxyBaseUrl: config.proxyBaseUrl });
+        const saved = await updateConfig(config => {
+            config.proxyBaseUrl = proxyBaseUrl || '';
+            return config.proxyBaseUrl;
+        });
+        res.json({ proxyBaseUrl: saved });
     } catch (e) {
         console.error('Proxy base URL update error:', e.message);
         res.status(500).json({ error: e.message });

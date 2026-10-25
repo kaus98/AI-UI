@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const http = require('http');
 const { getConfig } = require('./utils/helpers');
 
@@ -13,17 +14,18 @@ async function testEndpoint(name, fn) {
     } catch (e) {
         console.log('FAIL');
         console.error('  Error:', e.message);
+        process.exitCode = 1;
         return false;
     }
 }
 
-function req(method, path, body = null, headers = {}) {
+function req(method, urlPath, body = null, headers = {}) {
     return new Promise((resolve, reject) => {
         const opts = {
             method,
             headers: { 'Content-Type': 'application/json', ...headers }
         };
-        const r = http.request(`${BASE_URL}${path}`, opts, (res) => {
+        const r = http.request(`${BASE_URL}${urlPath}`, opts, (res) => {
             let data = '';
             res.on('data', c => data += c);
             res.on('end', () => {
@@ -38,6 +40,17 @@ function req(method, path, body = null, headers = {}) {
         if (body) r.write(JSON.stringify(body));
         r.end();
     });
+}
+
+function checkLogFile(file, expected) {
+    const fullPath = path.join(__dirname, 'logs', file);
+    if (!fs.existsSync(fullPath)) {
+        console.log(`FAIL logs/${file} missing`);
+        return;
+    }
+    console.log(`OK logs/${file} exists`);
+    const found = fs.readFileSync(fullPath, 'utf8').includes(expected);
+    console.log(found ? `  Content Verified: "${expected}" found` : `  Missing log entry: "${expected}"`);
 }
 
 (async () => {
@@ -85,23 +98,9 @@ function req(method, path, body = null, headers = {}) {
 
     // 4. Check Log Files Existence
     console.log('\n--- Checking Log Files ---');
-
-    if (fs.existsSync('logs/server_logs.txt')) {
-        console.log('OK logs/server_logs.txt exists');
-        const content = fs.readFileSync('logs/server_logs.txt', 'utf8');
-        if (content.includes('Incoming Request: GET /api/endpoints')) console.log('  Content Verified: Endpoint hit logged');
-        else console.log('  Missing specific log entry');
-    } else {
-        console.log('FAIL logs/server_logs.txt missing');
-    }
-
-    if (fs.existsSync('logs/client_logs.txt')) {
-        console.log('OK logs/client_logs.txt exists');
-        const content = fs.readFileSync('logs/client_logs.txt', 'utf8');
-        if (content.includes('Validation Script Test')) console.log('  Content Verified: Test log found');
-        else console.log('  Missing test log entry');
-    } else {
-        console.log('FAIL logs/client_logs.txt missing');
-    }
-
-})();
+    checkLogFile('requests.txt', 'GET /api/endpoints');
+    checkLogFile('client_logs.txt', 'Validation Script Test');
+})().catch(e => {
+    console.error('Validation runner error:', e);
+    process.exit(1);
+});
