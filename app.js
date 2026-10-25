@@ -6,8 +6,9 @@ const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
 const themeToggleBtn = document.getElementById('theme-toggle-btn');
 const statusIndicator = document.getElementById('status-indicator');
-const chatListDiv = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
+const incognitoChatBtn = document.getElementById('incognito-chat-btn');
+const regenerateTitlesBtn = document.getElementById('regenerate-titles-btn');
 const menuBtn = document.getElementById('menu-btn');
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
@@ -100,7 +101,7 @@ function renderChatList() {
 
     filtered.forEach(chat => {
         const div = document.createElement('div');
-        div.className = 'chat-item';
+        div.className = `chat-item${chat.isIncognito ? ' incognito-chat-item' : ''}`;
         if (chat.id === state.currentChatId) {
             div.classList.add('active');
         }
@@ -111,48 +112,138 @@ function renderChatList() {
         const dateStr = new Date(chat.timestamp).toLocaleString(undefined, {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
         });
+        
+        // Branch and privacy indicators
+        const branchIndicator = chat.isBranch ? '<span class="branch-indicator">🌿</span>' : '';
+        const incognitoIndicator = chat.isIncognito ? '<span class="incognito-indicator" title="This chat is not saved">Private</span>' : '';
+        
+        // Timeline visual indicators (always calculate but only show in Timeline view)
+        let timelineIndicator = '';
+        if (chat.parentBranchId) {
+            const parentChat = state.chats.find(c => c.id === chat.parentBranchId);
+            timelineIndicator = `<span class="timeline-child" title="Branch of: ${parentChat?.title || 'Unknown'}">└─</span>`;
+        } else if (state.chats.some(c => c.parentBranchId === chat.id)) {
+            timelineIndicator = `<span class="timeline-parent" title="Has branches">┬</span>`;
+        }
 
         const contentDiv = document.createElement('div');
         contentDiv.className = 'chat-content';
 
         const titleDiv = document.createElement('div');
         titleDiv.className = 'chat-title';
-        titleDiv.textContent = chat.title || 'New Chat';
+        titleDiv.innerHTML = `${timelineIndicator}${branchIndicator}${chat.title || 'New Chat'}${incognitoIndicator}`;
+        titleDiv.title = 'Double-click to rename';
+        titleDiv.ondblclick = (e) => {
+            e.stopPropagation();
+            const newTitle = prompt('Enter a new name for this chat:', chat.title || 'New Chat');
+            if (newTitle && newTitle.trim()) {
+                chat.title = newTitle.trim();
+                saveChatState();
+                renderChatList();
+            }
+        };
 
-        const tagsDiv = document.createElement('div');
-        tagsDiv.className = 'chat-item-tags';
+        contentDiv.appendChild(titleDiv);
+
+        // Create menu button
+        const menuBtn = document.createElement('button');
+        menuBtn.className = 'chat-menu-btn';
+        menuBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>`;
+        menuBtn.title = 'Chat options';
+        menuBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleChatMenu(chat.id, menuBtn);
+        };
+
+        // Create menu dropdown
+        const menuDropdown = document.createElement('div');
+        menuDropdown.className = 'chat-menu-dropdown';
+        menuDropdown.id = `chat-menu-${chat.id}`;
+
+        // Add meta info to dropdown
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'chat-menu-meta';
+        metaDiv.innerHTML = `
+            <div class="chat-menu-meta-item"><strong>Endpoint:</strong> ${endpointName}</div>
+            <div class="chat-menu-meta-item"><strong>Model:</strong> ${modelName}</div>
+            <div class="chat-menu-meta-item"><strong>Folder:</strong> ${chat.folder || DEFAULT_FOLDER}</div>
+            <div class="chat-menu-meta-item"><strong>Date:</strong> ${dateStr}</div>
+        `;
+        menuDropdown.appendChild(metaDiv);
+
+        // Add tags to dropdown if present
         if (chat.tags && chat.tags.length) {
+            const tagsDiv = document.createElement('div');
+            tagsDiv.className = 'chat-menu-tags';
+            tagsDiv.innerHTML = '<strong>Tags:</strong>';
             chat.tags.slice(0, 4).forEach(tag => {
                 const span = document.createElement('span');
                 span.className = 'chat-tag';
                 span.textContent = tag;
                 tagsDiv.appendChild(span);
             });
+            menuDropdown.appendChild(tagsDiv);
         }
 
-        const metaDiv = document.createElement('div');
-        metaDiv.className = 'chat-meta';
-        metaDiv.textContent = `${endpointName} • ${modelName} • ${chat.folder || DEFAULT_FOLDER} • ${dateStr}`;
+        // Add action buttons to dropdown
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'chat-menu-actions';
 
-        contentDiv.appendChild(titleDiv);
-        if (chat.tags && chat.tags.length) contentDiv.appendChild(tagsDiv);
-        contentDiv.appendChild(metaDiv);
+        const pinAction = document.createElement('button');
+        pinAction.className = 'chat-menu-action';
+        pinAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${chat.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2 4h4l-2 2 1 6-5 5-5-5 1-6-2-2h4z"></path></svg> ${chat.pinned ? 'Unpin' : 'Pin'}`;
+        pinAction.onclick = (e) => {
+            e.stopPropagation();
+            window.togglePinChat(chat.id);
+            toggleChatMenu(chat.id, menuBtn);
+        };
 
-        const pinBtn = document.createElement('button');
-        pinBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${chat.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2 4h4l-2 2 1 6-5 5-5-5 1-6-2-2h4z"></path></svg>`;
-        pinBtn.className = 'pin-chat-btn';
-        pinBtn.title = chat.pinned ? 'Unpin' : 'Pin';
-        pinBtn.onclick = (e) => { e.stopPropagation(); togglePinChat(chat.id); };
+        const renameAction = document.createElement('button');
+        renameAction.className = 'chat-menu-action';
+        renameAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Rename`;
+        renameAction.onclick = (e) => {
+            e.stopPropagation();
+            const newTitle = prompt('Enter a new name for this chat:', chat.title || 'New Chat');
+            if (newTitle && newTitle.trim()) {
+                chat.title = newTitle.trim();
+                saveChatState();
+                renderChatList();
+            }
+            toggleChatMenu(chat.id, menuBtn);
+        };
 
-        const delBtn = document.createElement('button');
-        delBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
-        delBtn.className = 'delete-chat-btn';
-        delBtn.onclick = (e) => { e.stopPropagation(); deleteChat(chat.id); };
+        const regenerateTitleAction = document.createElement('button');
+        regenerateTitleAction.className = 'chat-menu-action';
+        regenerateTitleAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path><path d="M16 21h5v-5"></path></svg> Regenerate title`;
+        regenerateTitleAction.onclick = (e) => {
+            e.stopPropagation();
+            toggleChatMenu(chat.id, menuBtn);
+            generateChatTitle(chat);
+        };
 
-        div.onclick = () => setCurrentChat(chat.id);
+        const deleteAction = document.createElement('button');
+        deleteAction.className = 'chat-menu-action chat-menu-action-danger';
+        deleteAction.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Delete`;
+        deleteAction.onclick = (e) => {
+            e.stopPropagation();
+            window.deleteChat(chat.id);
+        };
+
+        actionsDiv.appendChild(pinAction);
+        actionsDiv.appendChild(renameAction);
+        actionsDiv.appendChild(regenerateTitleAction);
+        actionsDiv.appendChild(deleteAction);
+        menuDropdown.appendChild(actionsDiv);
+
+        div.onclick = (e) => {
+            // Close menu if clicking on the chat item (not menu button or dropdown)
+            if (!e.target.closest('.chat-menu-btn') && !e.target.closest('.chat-menu-dropdown')) {
+                setCurrentChat(chat.id);
+            }
+        };
         div.appendChild(contentDiv);
-        div.appendChild(pinBtn);
-        div.appendChild(delBtn);
+        div.appendChild(menuBtn);
+        div.appendChild(menuDropdown);
         chatItems.appendChild(div);
     });
 
@@ -523,7 +614,7 @@ async function saveChatState() {
         await apiFetch('/api/history', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(state.chats)
+            body: JSON.stringify(state.chats.filter(chat => !chat.isIncognito))
         });
     } catch (e) {
         console.error('Failed to save state:', e);
@@ -536,7 +627,7 @@ async function loadChatState() {
         const response = await apiFetch('/api/history');
         if (response.ok) {
             const data = await response.json();
-            state.chats = Array.isArray(data) ? data : [];
+            state.chats = Array.isArray(data) ? data.filter(chat => !chat.isIncognito) : [];
             state.chats.forEach(c => {
                 if (c.endpointId != null) c.endpointId = String(c.endpointId);
                 if (c.modelId != null) c.modelId = String(c.modelId);
@@ -551,7 +642,7 @@ async function loadChatState() {
 
 // --- Chat Logic ---
 
-async function createNewChat(presetId = null) {
+async function createNewChat(presetId = null, incognito = false) {
     presetId = presetId || state.currentPresetId || null;
     const id = Date.now().toString();
     let endpointId = state.currentEndpointId;
@@ -586,10 +677,23 @@ async function createNewChat(presetId = null) {
         systemPrompt,
         messages: [],
         pinned: false,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        isIncognito: incognito
     };
     state.chats.unshift(newChat);
-    await saveChatState();
+    if (!incognito) await saveChatState();
+    return id;
+}
+
+async function createIncognitoChat() {
+    const id = await createNewChat(null, true);
+    const chat = getCurrentChat();
+    if (chat) {
+        chat.title = 'Incognito Chat';
+        chat.folder = DEFAULT_FOLDER;
+    }
+    renderChatList();
+    await setCurrentChat(id);
     return id;
 }
 
@@ -642,10 +746,11 @@ async function setCurrentChat(id) {
     if (window.innerWidth <= 768) sidebar.classList.remove('open');
 }
 
-function updateChatTitle(chat, firstMessage) {
+function updateChatTitle(chat) {
+    // Use AI to generate a meaningful title
     if (!chat.title || chat.title === 'New Chat') {
-        chat.title = firstMessage.length > 30 ? firstMessage.substring(0, 30) + '...' : firstMessage;
-        renderChatList();
+        console.log('Triggering title generation for chat:', chat.id);
+        generateChatTitle(chat);
     }
 }
 
@@ -805,15 +910,15 @@ const renderer = {
 const tokenizer = {
     // Disable indented code blocks (4 spaces). 
     // This forces users to use backticks for code blocks, preventing accidental splitting.
-    code(src) {
+    code() {
         return false;
     },
     // Also disable lists and blockquotes if we want strictly "text unless backticks"
     // This often causes code with dashes or > to be split into lists/quotes
-    list(src) { return false; },
-    blockquote(src) { return false; },
+    list() { return false; },
+    blockquote() { return false; },
     // Disable HTML parsing entirely. Treat <tags> as plain text.
-    html(src) { return false; }
+    html() { return false; }
 };
 
 try {
@@ -890,7 +995,7 @@ function appendMessageDiv(role, content, type, preRendered = null, chat = null, 
 
     // Wire up regenerate assistant message
     if (!isUser && chat && msgIndex >= 0) {
-        msgDiv.querySelector('.msg-regenerate-btn').addEventListener('click', () => regenerateAssistantMessage(chat, msgIndex, msgDiv));
+        msgDiv.querySelector('.msg-regenerate-btn').addEventListener('click', () => regenerateAssistantMessage(chat, msgIndex));
     }
 
     chatContainer.appendChild(msgDiv);
@@ -1190,7 +1295,7 @@ function editUserMessage(chat, msgIndex, msgDiv) {
     ta.focus();
 }
 
-async function regenerateAssistantMessage(chat, msgIndex, msgDiv) {
+async function regenerateAssistantMessage(chat, msgIndex) {
     if (state.isGenerating) return;
     // Truncate messages at the user message preceding this assistant
     let cutIndex = msgIndex;
@@ -1218,7 +1323,6 @@ async function generateAssistantResponse(chat) {
 
     let answerBuffer = '';
     let reasoningBuffer = '';
-    let rawText = '';
     let hasReceivedData = false;
     let ep = null;
     let usage = null;
@@ -1254,10 +1358,6 @@ async function generateAssistantResponse(chat) {
         aiBodyDiv.appendChild(answerEl);
 
         hasReceivedData = true;
-    }
-
-    function estimateTokens(text) {
-        return Math.ceil(text.length / 4);
     }
 
     function appendReasoning(text) {
@@ -1302,7 +1402,7 @@ async function generateAssistantResponse(chat) {
 
         if (chat) {
             const regenerateBtn = aiMsgDiv.querySelector('.msg-regenerate-btn');
-            if (regenerateBtn) regenerateBtn.addEventListener('click', () => regenerateAssistantMessage(chat, assistantIndex, aiMsgDiv));
+            if (regenerateBtn) regenerateBtn.addEventListener('click', () => regenerateAssistantMessage(chat, assistantIndex));
         }
     }
 
@@ -1366,7 +1466,6 @@ async function generateAssistantResponse(chat) {
             chunkCount++;
             const decoded = decoder.decode(value, { stream: true });
             pending += decoded;
-            rawText += decoded;
             const lines = pending.split('\n');
             pending = lines.pop();
 
@@ -1501,7 +1600,7 @@ async function sendMessage() {
     const userMsgIndex = chat.messages.length - 1;
     appendMessageDiv('User', null, 'user', uiContent, chat, userMsgIndex, chat.messages[userMsgIndex].createdAt);
 
-    updateChatTitle(chat, text);
+    updateChatTitle(chat);
     await saveChatState();
     scrollToBottom();
 
@@ -1672,7 +1771,7 @@ function applyPreset(presetId) {
 
 // --- Export / Import Chats ---
 function exportChats() {
-    const data = JSON.stringify(state.chats, null, 2);
+    const data = JSON.stringify(state.chats.filter(chat => !chat.isIncognito), null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1757,7 +1856,7 @@ function initEasyMDE() {
 
     // Custom Key Handler for Enter to Send
     window.easyMDE.codemirror.setOption("extraKeys", {
-        "Enter": function (cm) {
+        "Enter": function () {
             sendMessage();
         },
         "Shift-Enter": function (cm) {
@@ -1806,6 +1905,17 @@ newChatBtn.addEventListener('click', async () => {
     const id = await createNewChat();
     await setCurrentChat(id);
 });
+
+incognitoChatBtn.addEventListener('click', async () => {
+    await createIncognitoChat();
+});
+
+if (regenerateTitlesBtn) {
+    regenerateTitlesBtn.addEventListener('click', async () => {
+        await regenerateAllUntitledChats();
+    });
+}
+
 menuBtn.addEventListener('click', () => {
     sidebar.classList.toggle('open');
     sidebarOverlay.classList.toggle('active');
@@ -1813,6 +1923,20 @@ menuBtn.addEventListener('click', () => {
 sidebarOverlay.addEventListener('click', () => {
     sidebar.classList.remove('open');
     sidebarOverlay.classList.remove('active');
+});
+
+// Close chat menus when clicking outside
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.chat-menu-btn') && !e.target.closest('.chat-menu-dropdown')) {
+        document.querySelectorAll('.chat-menu-dropdown.open').forEach(menu => {
+            menu.classList.remove('open');
+        });
+    }
+    // Close folder menu if clicking outside
+    const folderMenu = document.querySelector('.folder-menu');
+    if (folderMenu && !e.target.closest('.folder-menu') && !e.target.closest('.chat-menu-action')) {
+        folderMenu.remove();
+    }
 });
 
 // Touch gesture support for mobile sidebar
@@ -2156,6 +2280,169 @@ function renderImagePreviews() {
         div.appendChild(removeBtn);
         imagePreviewContainer.appendChild(div);
     });
+}
+
+// --- Chat Menu Functions ---
+
+function toggleChatMenu(chatId, triggerBtn) {
+    // Close all other open menus first
+    document.querySelectorAll('.chat-menu-dropdown.open').forEach(menu => {
+        if (menu.id !== `chat-menu-${chatId}`) {
+            menu.classList.remove('open');
+        }
+    });
+
+    const menu = document.getElementById(`chat-menu-${chatId}`);
+    if (!menu) return;
+
+    const isOpen = menu.classList.contains('open');
+    menu.classList.toggle('open');
+
+    if (!isOpen) {
+        // Move menu to body for proper positioning
+        document.body.appendChild(menu);
+        const rect = triggerBtn.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.top = `${rect.bottom + 4}px`;
+        menu.style.right = `${window.innerWidth - rect.right}px`;
+        menu.style.zIndex = '1001';
+    }
+}
+
+async function generateChatTitle(chat) {
+    if (chat.titleGenerating || chat.isIncognito) return;
+    try {
+        const firstUserMessage = chat.messages.find(m => m.role === 'user');
+        if (!firstUserMessage) return;
+
+        const messageText = getMessageText(firstUserMessage.content);
+        if (!messageText || messageText.length < 10) return;
+
+        const endpointId = chat.endpointId || state.currentEndpointId;
+        const ep = state.endpoints.find(e => e.id === endpointId);
+        const model = chat.modelId || ep?.defaultModel || modelSelect.value;
+        if (!endpointId || !model) {
+            console.warn('Cannot generate title: missing endpoint or model');
+            // Fallback: use first few words of message
+            const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+            chat.title = fallbackTitle.substring(0, 50);
+            await saveChatState();
+            renderChatList();
+            return;
+        }
+
+        chat.titleGenerating = true;
+        const titlePrompt = `Generate a short, concise title of no more than 5 words for this conversation. Return only the title, with no quotes, explanation, or punctuation.
+
+First message: "${messageText.substring(0, 500)}"`;
+        
+        // Use streaming to match server behavior for localhost endpoints
+        const response = await apiFetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                endpointId,
+                model,
+                messages: [{ role: 'user', content: titlePrompt }],
+                temperature: 0.3,
+                stream: true,
+                activeTools: []
+            })
+        });
+
+        if (!response.ok) {
+            console.warn('Failed to generate title: API response not OK', response.status);
+            const errorText = await response.text();
+            console.warn('Error response:', errorText);
+            // Fallback: use first few words of message
+            const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+            chat.title = fallbackTitle.substring(0, 50);
+            await saveChatState();
+            renderChatList();
+            return;
+        }
+
+        // Handle streaming response
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6);
+                    if (data === '[DONE]') continue;
+                    
+                    try {
+                        const parsed = JSON.parse(data);
+                        if (parsed.choices?.[0]?.delta?.content) {
+                            fullContent += parsed.choices[0].delta.content;
+                        }
+                    } catch (e) {
+                        // Ignore parse errors for SSE chunks
+                    }
+                }
+            }
+        }
+
+        const generatedTitle = fullContent.trim().replace(/^["']|["']$/g, '').replace(/[.!?]+$/, '').substring(0, 50);
+
+        if (generatedTitle.length > 2) {
+            chat.title = generatedTitle;
+            await saveChatState();
+            renderChatList();
+            console.log('Generated chat title:', generatedTitle);
+        } else {
+            console.warn('Generated title too short or invalid:', fullContent);
+            // Fallback: use first few words of message
+            const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+            chat.title = fallbackTitle.substring(0, 50);
+            await saveChatState();
+            renderChatList();
+        }
+    } catch (e) {
+        console.warn('Failed to generate chat title:', e);
+        // Fallback: use first few words of message
+        const firstUserMessage = chat.messages.find(m => m.role === 'user');
+        if (firstUserMessage) {
+            const messageText = getMessageText(firstUserMessage.content);
+            if (messageText) {
+                const fallbackTitle = messageText.split(' ').slice(0, 4).join(' ') + '...';
+                chat.title = fallbackTitle.substring(0, 50);
+                await saveChatState();
+                renderChatList();
+            }
+        }
+    } finally {
+        delete chat.titleGenerating;
+    }
+}
+
+// Function to regenerate titles for all chats with "New Chat"
+async function regenerateAllUntitledChats() {
+    const untitledChats = state.chats.filter(c => !c.title || c.title === 'New Chat');
+    if (untitledChats.length === 0) {
+        alert('No chats need title regeneration.');
+        return;
+    }
+    
+    if (!confirm(`Regenerate titles for ${untitledChats.length} chat(s)? This will use your API quota.`)) {
+        return;
+    }
+    
+    for (const chat of untitledChats) {
+        await generateChatTitle(chat);
+        // Small delay between requests to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    alert(`Regenerated titles for ${untitledChats.length} chat(s).`);
 }
 
 // --- Global Error Handling ---
